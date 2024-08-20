@@ -159,8 +159,10 @@ class ImageEmbeding(nn.Module):
         self,
         dataloader: torch.utils.data.DataLoader,
         epochs: int,
+        test_dataloader: torch.utils.data.DataLoader = None,
         optimizer: Optional[torch.optim.Optimizer | str] = None,
         use_wandb: bool = False,
+        checkpoint_path: Optional[str] = None,
         **kwargs,
     ):
         self.train()
@@ -234,7 +236,30 @@ class ImageEmbeding(nn.Module):
                         ),
                         task_id=pid,
                     )
+
                 print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item()}")
+            if test_dataloader:
+                self.eval()
+                print("Testing...")
+                all_loss = []
+                for img1, img2, label in test_dataloader:
+                    img1 = img1.to(self.device)
+                    img2 = img2.to(self.device)
+                    label = label.to(self.device)
+                    distance = self.predict(img1, img2)
+                    loss = self.loss_function(distance, label).mean()
+                    all_loss.append(loss.item())
+                print(f"Test loss: {np.mean(all_loss)}")
+                if use_wandb:
+                    wandb.log({"test_loss": np.mean(all_loss)})
+                self.train()
+            if checkpoint_path:
+                self.save(
+                    os.path.join(
+                        checkpoint_path,
+                        f"checkpoint_{wandb.run.id}_{wandb.run.name}.pth",
+                    )
+                )
 
         if use_wandb:
             wandb.finish()
