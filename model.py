@@ -195,11 +195,16 @@ class ImageEmbeding(nn.Module):
         progress_bar_message = "[bold cyan]Epoch {current_epoch}/{max_epochs}, loss={loss:.4f}, steps={task.completed}/{task.total}[/]"
         for epoch in range(epochs):
             with Progress() as progress:
-                pid = progress.add_task(
-                    progress_bar_message.format(
-                        current_epoch=epoch + 1, max_epochs=epochs, loss=0, steps=0
+                pid = progress.add_task("", total=len(dataloader))
+                progress.update(
+                    advance=0,
+                    description=progress_bar_message.format(
+                        current_epoch=epoch + 1,
+                        max_epochs=epochs,
+                        loss=0,
+                        task=progress.tasks[pid],
                     ),
-                    total=len(dataloader),
+                    task_id=pid,
                 )
                 for img1, img2, label in dataloader:
                     img1 = img1.to(self.device)
