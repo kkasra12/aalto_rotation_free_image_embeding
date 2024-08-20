@@ -188,7 +188,12 @@ class ImageEmbeding(nn.Module):
             wandb.init(
                 project="image-embedding",
                 config=kwargs
-                | {"epochs": epochs, "optimizer": optimizer.__class__.__name__},
+                | {
+                    "epochs": epochs,
+                    "optimizer": optimizer.__class__.__name__,
+                    "device": self.device,
+                    "node": os.uname().nodename,
+                },
             )
             wandb.watch(self)
 
