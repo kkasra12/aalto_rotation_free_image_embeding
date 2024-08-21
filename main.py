@@ -3,6 +3,7 @@ import torch
 import torch.utils
 import torch.utils.data
 from torchvision.transforms import v2
+import wandb
 
 from data import ImagePairsDataset
 from model import ImageEmbeding
@@ -53,6 +54,21 @@ def main(
     print("train dataloader length:", len(train_dataloader))
     print("test dataloader length:", len(test_dataloader))
 
+    if use_wandb:
+        wandb.init(
+            project="image-embedding",
+            config=model_kwargs
+            | {
+                "max_img_per_class": max_img_per_class,
+                "batch_size": batch_size,
+                "num_workers": num_workers,
+                "epochs": epochs,
+                "checkpoint_path": checkpoint_path,
+                "device": device,
+                "node": os.uname().nodename,
+            },
+        )
+
     img1, img2, label = next(iter(train_dataloader))
     assert img1.shape == img2.shape
     input_shape = img1.shape[1:]
@@ -66,7 +82,6 @@ def main(
         use_wandb=use_wandb,
         checkpoint_path=checkpoint_path,
     )
-    model.save("model.pth")
 
 
 if __name__ == "__main__":

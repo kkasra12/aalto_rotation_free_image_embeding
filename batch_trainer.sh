@@ -21,7 +21,8 @@ conda activate llama_env
 echo "Running main.py"
 srun --unbuffered python main.py \
     --train "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/train" \
-    --test "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/test"
+    --test "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/test" \
+    -m 100
 echo "Done"
 # to run this file we can use the following command
 # sbatch train_model.sh

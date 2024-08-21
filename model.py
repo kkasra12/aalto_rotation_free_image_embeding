@@ -188,16 +188,6 @@ class ImageEmbeding(nn.Module):
             )
 
         if use_wandb:
-            wandb.init(
-                project="image-embedding",
-                config=kwargs
-                | {
-                    "epochs": epochs,
-                    "optimizer": optimizer.__class__.__name__,
-                    "device": self.device,
-                    "node": os.uname().nodename,
-                },
-            )
             wandb.watch(self)
 
         progress_bar_message = "[bold cyan]Epoch {current_epoch}/{max_epochs}, loss={loss:.4f}, steps={task.completed}/{task.total}[/]"
