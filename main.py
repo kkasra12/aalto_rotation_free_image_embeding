@@ -1,4 +1,3 @@
-from re import T
 import torch
 import torch.utils
 import torch.utils.data
@@ -20,6 +19,7 @@ def main(
     transform=None,
     model_kwargs={},
     device=None,
+    use_wandb=True,
 ):
     if transform is None:
         transform = v2.Compose(
@@ -53,7 +53,7 @@ def main(
         dataloader=train_dataloader,
         test_dataloader=test_dataloader,
         epochs=epochs,
-        use_wandb=True,
+        use_wandb=use_wandb,
     )
     model.save("model.pth")
 
