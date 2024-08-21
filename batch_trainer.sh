@@ -19,7 +19,9 @@ export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK # Propagate Slurm 'cpus-per-task'
 echo "Running on $(hostname)"
 conda activate llama_env
 echo "Running main.py"
-srun --unbuffered python main.py
+srun --unbuffered python main.py \
+    --train "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/train" \
+    --test "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/test"
 echo "Done"
 # to run this file we can use the following command
 # sbatch train_model.sh

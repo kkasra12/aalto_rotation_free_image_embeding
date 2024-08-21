@@ -1,3 +1,4 @@
+from re import T
 import torch
 import torch.utils
 import torch.utils.data
@@ -5,6 +6,9 @@ from torchvision.transforms import v2
 
 from data import ImagePairsDataset
 from model import ImageEmbeding
+import argparse
+from rich.console import Console
+from rich.table import Table
 
 
 def main(
@@ -12,6 +16,7 @@ def main(
     test_folder="/home/kasra/datasets/tanks_and_temples/images/test",
     batch_size=32,
     num_workers=4,
+    epochs=10,
     transform=None,
     model_kwargs={},
     device=None,
@@ -47,11 +52,60 @@ def main(
     model.fit(
         dataloader=train_dataloader,
         test_dataloader=test_dataloader,
-        epochs=10,
+        epochs=epochs,
         use_wandb=True,
     )
     model.save("model.pth")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Image Embedding Training")
+    parser.add_argument(
+        "--train_folder",
+        "--train",
+        type=str,
+        default="/home/kasra/datasets/tanks_and_temples/images/train",
+        help="Path to the training folder",
+    )
+    parser.add_argument(
+        "--test_folder",
+        "--test",
+        type=str,
+        default="/home/kasra/datasets/tanks_and_temples/images/test",
+        help="Path to the testing folder",
+    )
+    parser.add_argument(
+        "--batch_size", "-b", type=int, default=32, help="Batch size for training"
+    )
+    parser.add_argument(
+        "--num_workers",
+        "-n",
+        type=int,
+        default=4,
+        help="Number of workers for data loading",
+    )
+    parser.add_argument(
+        "--epochs", "-e", type=int, default=10, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--use_wandb",
+        "-w",
+        action="store_true",
+        help="Whether to use wandb for logging",
+    )
+    args = parser.parse_args()
+    args_table = Table(title="Arguments")
+    args_table.add_column("Argument")
+    args_table.add_column("Value")
+    for i, j in vars(args).items():
+        args_table.add_row(i, str(j))
+    console = Console()
+    console.print(args_table)
+    main(
+        train_folder=args.train_folder,
+        test_folder=args.test_folder,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        epochs=args.epochs,
+        use_wandb=args.use_wandb,
+    )
