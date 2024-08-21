@@ -18,7 +18,7 @@ where m > 0 is a margin, D_W is the distance between the embeddings of X1 and X2
 
 import os
 from typing import Optional
-from rich.progress import Progress
+from rich.progress import Progress, TimeElapsedColumn
 import numpy as np
 import torch
 from torch import nn
@@ -201,7 +201,9 @@ class ImageEmbeding(nn.Module):
 
         progress_bar_message = "[bold cyan]Epoch {current_epoch}/{max_epochs}, loss={loss:.4f}, steps={task.completed}/{task.total}[/]"
         for epoch in range(epochs):
-            with Progress() as progress:
+            with Progress(
+                *Progress.get_default_columns(), TimeElapsedColumn()
+            ) as progress:
                 pid = progress.add_task("", total=len(dataloader))
                 progress.update(
                     advance=0,

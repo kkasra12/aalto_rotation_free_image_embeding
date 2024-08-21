@@ -44,7 +44,12 @@ def main(
     print(f"dataset sample shapes: {img1.shape=}, {img2.shape=}, {label=}")
     print(f"{input_shape=}")
     model = ImageEmbeding(input_shape=input_shape, device=device, **model_kwargs)
-    model.fit(dataloader=data_loader, epochs=10, use_wandb=True)
+    model.fit(
+        dataloader=train_dataloader,
+        test_dataloader=test_dataloader,
+        epochs=10,
+        use_wandb=True,
+    )
     model.save("model.pth")
 
 
