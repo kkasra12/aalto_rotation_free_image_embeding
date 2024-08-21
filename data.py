@@ -15,6 +15,7 @@ This module contains the dataset class for the image pairs dataset.
 from functools import lru_cache
 from itertools import combinations
 import os
+from typing import Optional
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -55,18 +56,34 @@ class Image:
 class ImagePairsDataset(Dataset):
     files: list[Image]
 
-    def __init__(self, root_dir: str | os.PathLike, transform=None, seed: int = None):
+    def __init__(
+        self,
+        root_dir: str | os.PathLike,
+        transform=None,
+        seed: int = None,
+        max_img_per_class: Optional[int] = None,
+    ):
         self.root_dir = root_dir
         if seed:
             torch.manual_seed(seed)
         if not os.path.isdir(root_dir):
             raise FileNotFoundError(f"Directory {root_dir} does not exist")
         classes = os.listdir(root_dir)
-        self.files = [
-            Image(root_dir, class_name, file_name, transform)
-            for class_name in classes
-            for file_name in os.listdir(os.path.join(root_dir, class_name))
-        ]
+        if max_img_per_class is not None:
+            self.files = [
+                Image(root_dir, class_name, file_name, transform)
+                for class_name in classes
+                for _, file_name in zip(
+                    range(max_img_per_class),
+                    os.listdir(os.path.join(root_dir, class_name)),
+                )
+            ]
+        else:
+            self.files = [
+                Image(root_dir, class_name, file_name, transform)
+                for class_name in classes
+                for file_name in os.listdir(os.path.join(root_dir, class_name))
+            ]
         self.pairse = list(combinations(self.files, 2))
 
     def __len__(self):

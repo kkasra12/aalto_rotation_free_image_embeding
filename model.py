@@ -16,6 +16,7 @@ L(W, Y, X1, X2) = (1 - Y) * 1/2 D_W^2 + Y/2 {max(0, m - D_W )}^2
 where m > 0 is a margin, D_W is the distance between the embeddings of X1 and X2, and Y is the label (0 or 1). Y is 1 if the images are of the same class, 0 otherwise.
 """
 
+import dis
 import os
 from typing import Optional
 from rich.progress import Progress, TimeElapsedColumn
@@ -215,6 +216,8 @@ class ImageEmbeding(nn.Module):
                     ),
                     task_id=pid,
                 )
+                train_loss = 0
+                count = 0
                 for img1, img2, label in dataloader:
                     img1 = img1.to(self.device)
                     img2 = img2.to(self.device)
@@ -226,8 +229,9 @@ class ImageEmbeding(nn.Module):
                     loss = self.loss_function(distance, label).mean()
                     loss.backward()
                     optimizer.step()
-                    if use_wandb:
-                        wandb.log({"loss": loss.item()})
+
+                    train_loss += loss.item()
+                    count += 1
                     progress.update(
                         advance=1,
                         description=progress_bar_message.format(
@@ -238,12 +242,16 @@ class ImageEmbeding(nn.Module):
                         ),
                         task_id=pid,
                     )
-
-                print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item()}")
+                loss = train_loss / count
+                if use_wandb:
+                    wandb.log({"train_loss": loss})
+                print(f"Epoch {epoch+1}/{epochs}, Loss: {loss}")
             if test_dataloader:
                 self.eval()
                 print("Testing...")
                 all_loss = []
+                distance_same_scene = []
+                distance_diff_scene = []
                 for img1, img2, label in test_dataloader:
                     img1 = img1.to(self.device)
                     img2 = img2.to(self.device)
@@ -251,9 +259,20 @@ class ImageEmbeding(nn.Module):
                     distance = self.predict(img1, img2)
                     loss = self.loss_function(distance, label).mean()
                     all_loss.append(loss.item())
+                    if 1 in label:
+                        distance_same_scene.append(distance[label == 1].mean().item())
+                    if 0 in label:
+                        distance_diff_scene.append(distance[label == 0].mean().item())
                 print(f"Test loss: {np.mean(all_loss)}")
                 if use_wandb:
-                    wandb.log({"test_loss": np.mean(all_loss)})
+                    wandb.log(
+                        {
+                            "test_loss": np.mean(all_loss),
+                            "distance_same_scene": wandb.Histogram(distance_same_scene),
+                            "distance_diff_scene": wandb.Histogram(distance_diff_scene),
+                        }
+                    )
+
                 self.train()
             if checkpoint_path:
                 self.save(
