@@ -16,7 +16,6 @@ L(W, Y, X1, X2) = (1 - Y) * 1/2 D_W^2 + Y/2 {max(0, m - D_W )}^2
 where m > 0 is a margin, D_W is the distance between the embeddings of X1 and X2, and Y is the label (0 or 1). Y is 1 if the images are of the same class, 0 otherwise.
 """
 
-import dis
 import os
 from typing import Optional
 from rich.progress import Progress, TimeElapsedColumn
@@ -39,7 +38,7 @@ class ImageEmbeding(nn.Module):
         input_shape: tuple[int],
         distance="euclidean",
         embedding_size=128,
-        preprocess_network="resnet18",
+        cnn_model="resnet18",
         loss_function="linear",
         loss_margin=1,
         device=None,
@@ -52,7 +51,7 @@ class ImageEmbeding(nn.Module):
         self.distance = distance
         self.embedding_size = embedding_size
 
-        if preprocess_network == "resnet18":
+        if cnn_model == "resnet18":
             self.preprocess = models.resnet18(
                 weights=models.ResNet18_Weights.IMAGENET1K_V1
             )
@@ -65,7 +64,7 @@ class ImageEmbeding(nn.Module):
                 padding=3,
                 bias=False,
             )
-        elif preprocess_network == "resnet50":
+        elif cnn_model == "resnet50":
             self.preprocess = models.resnet50(pretrained=True)
             self.preprocess.fc = nn.Identity()
             self.preprocess.conv1 = nn.Conv2d(
@@ -76,7 +75,7 @@ class ImageEmbeding(nn.Module):
                 padding=3,
                 bias=False,
             )
-        elif preprocess_network == "simple":
+        elif cnn_model == "simple":
             self.preprocess = nn.Sequential(
                 nn.Conv2d(input_shape[0], 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
@@ -94,7 +93,7 @@ class ImageEmbeding(nn.Module):
             )
         else:
             raise ValueError(
-                f"Preprocess network {preprocess_network} not supported. Choose from ['resnet18', 'resnet50', 'simple']"
+                f"Preprocess network {cnn_model} not supported. Choose from ['resnet18', 'resnet50', 'simple']"
             )
 
         self.embedding = nn.Sequential(
@@ -111,9 +110,11 @@ class ImageEmbeding(nn.Module):
         # the output of distance functions is (batch_size,) which is the distance between the two embeddings
 
         if loss_function == "linear":
-            self.loss_function = lambda dx, y: (
-                (1 - y) * 1 / 2 * dx**2
-                + y / 2 * torch.clamp(loss_margin - dx, min=0) ** 2
+            self.loss_function = (
+                lambda dx, y: (
+                    (1 - y) * dx**2 + y * torch.clamp(loss_margin - dx, min=0) ** 2
+                )
+                / 2
             )
         # the input of loss function is two matrix of size (batch_size, )
         # the output of loss function is (batch_size, ) which is the loss for each pair
@@ -132,29 +133,30 @@ class ImageEmbeding(nn.Module):
         self.device = device
         self.to(device)
 
-    def one_forward(self, img: torch.Tensor) -> torch.Tensor:
+    # def one_forward(self, img: torch.Tensor) -> torch.Tensor:
+    #     return self.embedding(self.preprocess(img))
+
+    def forward(self, img: torch.Tensor) -> torch.Tensor:
+        # emb1 = self.one_forward(img1)
+        # emb2 = self.one_forward(img2)
+        # return self.distance_function(emb1, emb2)
         return self.embedding(self.preprocess(img))
 
-    def forward(self, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
-        emb1 = self.one_forward(img1)
-        emb2 = self.one_forward(img2)
-        return self.distance_function(emb1, emb2)
+    # def train_step(
+    #     self, img1: torch.Tensor, img2: torch.Tensor, label: torch.Tensor
+    # ) -> torch.Tensor:
+    #     """
 
-    def train_step(
-        self, img1: torch.Tensor, img2: torch.Tensor, label: torch.Tensor
-    ) -> torch.Tensor:
-        """
+    #     Args:
+    #         img1 (torch.Tensor): Image 1
+    #         img2 (torch.Tensor): Image 2
+    #         label (torch.Tensor): 0: same class, 1 different class
 
-        Args:
-            img1 (torch.Tensor): Image 1
-            img2 (torch.Tensor): Image 2
-            label (torch.Tensor): 0: Different class, 1: Same class
-
-        Returns:
-            torch.Tensor: Loss
-        """
-        dx = self.forward(img1, img2)
-        return self.loss_function(dx, label)
+    #     Returns:
+    #         torch.Tensor: Loss
+    #     """
+    #     dx = self.forward(img1, img2)
+    #     return self.loss_function(dx, label)
 
     def fit(
         self,
@@ -215,7 +217,9 @@ class ImageEmbeding(nn.Module):
                     # TODO: add this part to the dataset
 
                     optimizer.zero_grad()
-                    distance = self.train_step(img1, img2, label)
+                    emb1 = self(img1)
+                    emb2 = self(img2)
+                    distance = self.distance_function(emb1, emb2)
                     loss = self.loss_function(distance, label).mean()
                     loss.backward()
                     optimizer.step()
@@ -249,10 +253,10 @@ class ImageEmbeding(nn.Module):
                     distance = self.predict(img1, img2)
                     loss = self.loss_function(distance, label).mean()
                     all_loss.append(loss.item())
-                    if 1 in label:
-                        distance_same_scene.append(distance[label == 1].mean().item())
                     if 0 in label:
-                        distance_diff_scene.append(distance[label == 0].mean().item())
+                        distance_same_scene.append(distance[label == 0].mean().item())
+                    if 1 in label:
+                        distance_diff_scene.append(distance[label == 1].mean().item())
                 print(f"Test loss: {np.mean(all_loss)}")
                 if use_wandb:
                     wandb.log(
@@ -279,12 +283,12 @@ class ImageEmbeding(nn.Module):
 
     def predict(self, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
-            dx = self.forward(img1, img2)
+            dx = self.distance_function(self(img1), self(img2))
             return dx
 
     def predict_one(self, img: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
-            return self.one_forward(img)
+            return self(img)
 
     def save(self, path: str | os.PathLike):
         torch.save(self.state_dict(), path)

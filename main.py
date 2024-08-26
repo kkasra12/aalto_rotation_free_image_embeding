@@ -1,3 +1,4 @@
+from ast import parse
 import os
 import torch
 import torch.utils
@@ -12,9 +13,63 @@ from rich.console import Console
 from rich.table import Table
 
 
+def create_datasets(
+    train_folder: str | os.PathLike,
+    test_folder: str | os.PathLike,
+    max_img_per_class: int,
+    transform=None,
+    test_size: float = 0.2,
+):
+    """
+    creates test and train dataset
+
+    Args:
+    train_folder: str|os.PathLike: path to the training folder
+    test_folder: str|os.PathLike: path to the testing folder
+    max_img_per_class: int: max images per class
+    transform: torchvision.transforms.Compose: transformation for the images
+    test_size: float: portion of the test dataset,
+                               if zero, the test dataset will be created from the test folder
+                               and the train folder will be used for the train dataset.
+                               if more than zero, the test and train folders will be combined
+                               and the test_size will be used to split the dataset into test and train datasets.
+                               will raise an error if the value
+                               is less than zero or more than one.
+
+    """
+    if 0 < test_size < 1:
+        dataset = ImagePairsDataset(
+            root_dirs=[train_folder, test_folder],
+            transform=transform,
+            max_img_per_class=max_img_per_class,
+        )
+        train_len = int(len(dataset) * (1 - test_size))
+        test_len = len(dataset) - train_len
+        train_dataset, test_dataset = torch.utils.data.random_split(
+            dataset, [train_len, test_len]
+        )
+    elif test_size == 0:
+        train_dataset = ImagePairsDataset(
+            root_dirs=train_folder,
+            transform=transform,
+            max_img_per_class=max_img_per_class,
+        )
+        test_dataset = ImagePairsDataset(
+            root_dirs=test_folder,
+            transform=transform,
+            max_img_per_class=max_img_per_class,
+        )
+    else:
+        raise ValueError(
+            f"test_size should be between 0 and 1, inclusive, or zero not {test_size}"
+        )
+    return train_dataset, test_dataset
+
+
 def main(
     train_folder,
     test_folder,
+    test_size,
     max_img_per_class,
     batch_size,
     num_workers,
@@ -35,11 +90,18 @@ def main(
     if checkpoint_path is not None:
         os.makedirs(checkpoint_path, exist_ok=True)
 
-    train_dataset = ImagePairsDataset(
-        train_folder, seed=42, transform=transform, max_img_per_class=max_img_per_class
-    )
-    test_dataset = ImagePairsDataset(
-        test_folder, seed=42, transform=transform, max_img_per_class=max_img_per_class
+    # train_dataset = ImagePairsDataset(
+    #     train_folder, seed=42, transform=transform, max_img_per_class=max_img_per_class
+    # )
+    # test_dataset = ImagePairsDataset(
+    #     test_folder, seed=42, transform=transform, max_img_per_class=max_img_per_class
+    # )
+    train_dataset, test_dataset = create_datasets(
+        train_folder=train_folder,
+        test_folder=test_folder,
+        max_img_per_class=max_img_per_class,
+        transform=transform,
+        test_size=test_size,
     )
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
@@ -66,6 +128,7 @@ def main(
                 "checkpoint_path": checkpoint_path,
                 "device": device,
                 "node": os.uname().nodename,
+                "test_size": test_size,
             },
         )
 
@@ -101,6 +164,18 @@ if __name__ == "__main__":
         help="Path to the testing folder",
     )
     parser.add_argument(
+        "--test_size",
+        "-t",
+        type=float,
+        default=0.2,
+        help="Portion of the test dataset, "
+        "if zero, the test dataset will be created from the test folder and the train folder will be used for the train dataset. "
+        "if more than zero, the test and train folders will be combined "
+        "and the test_size will be used to split the dataset into test and train datasets. "
+        "will raise an error if the value is less than zero or more than one.",
+    )
+
+    parser.add_argument(
         "--max_img_per_class", "-m", type=int, default=20, help="Max images per class"
     )
     parser.add_argument(
@@ -122,7 +197,45 @@ if __name__ == "__main__":
         action="store_false",
         help="Whether to use wandb for logging",
     )
+    parser.add_argument(
+        "--cnn",
+        "-c",
+        type=str,
+        choices=["resnet18", "resnet50", "simple"],
+        default="simple",
+        help="The CNN part of the model",
+    )
+    parser.add_argument(
+        "--loss_margin",
+        "-l",
+        type=float,
+        default=1.0,
+        help="The margin parameter in the loss function",
+    )
+    parser.add_argument(
+        "--distance",
+        "-d",
+        type=str,
+        choices=["cosine", "euclidean"],
+        default="cosine",
+        help="The distance metric to use",
+    )
+    parser.add_argument(
+        "--json",
+        type=str,
+        default=None,
+        help="Path to the json file containing the model parameters, "
+        "if this argument provided, all other arguments will be ignored",
+    )
+
     args = parser.parse_args()
+    if args.json is not None:
+        import json
+
+        with open(args.json, "r") as f:
+            for k, v in json.load(f).items():
+                setattr(args, k, v)
+
     args_table = Table(title="Arguments")
     args_table.add_column("Argument")
     args_table.add_column("Value")
@@ -133,10 +246,16 @@ if __name__ == "__main__":
     main(
         train_folder=args.train_folder,
         test_folder=args.test_folder,
+        test_size=args.test_size,
         max_img_per_class=args.max_img_per_class,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         epochs=args.epochs,
         use_wandb=args.use_wandb,
         transform=None,
+        model_kwargs={
+            "cnn_model": args.cnn,
+            "loss_margin": args.loss_margin,
+            "distance": args.distance,
+        },
     )

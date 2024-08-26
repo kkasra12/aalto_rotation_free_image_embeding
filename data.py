@@ -13,7 +13,7 @@ This module contains the dataset class for the image pairs dataset.
 """
 
 from functools import lru_cache
-from itertools import combinations
+from itertools import combinations, count
 import os
 from typing import Optional
 import numpy as np
@@ -58,32 +58,44 @@ class ImagePairsDataset(Dataset):
 
     def __init__(
         self,
-        root_dir: str | os.PathLike,
+        root_dirs: list[str | os.PathLike] | str | os.PathLike,
         transform=None,
         seed: int = None,
         max_img_per_class: Optional[int] = None,
     ):
-        self.root_dir = root_dir
+        if isinstance(root_dirs, str):
+            root_dirs = [root_dirs]
+        self.root_dirs = root_dirs
         if seed:
             torch.manual_seed(seed)
-        if not os.path.isdir(root_dir):
-            raise FileNotFoundError(f"Directory {root_dir} does not exist")
-        classes = os.listdir(root_dir)
-        if max_img_per_class is not None:
-            self.files = [
-                Image(root_dir, class_name, file_name, transform)
-                for class_name in classes
-                for _, file_name in zip(
-                    range(max_img_per_class),
-                    os.listdir(os.path.join(root_dir, class_name)),
-                )
-            ]
-        else:
-            self.files = [
-                Image(root_dir, class_name, file_name, transform)
-                for class_name in classes
-                for file_name in os.listdir(os.path.join(root_dir, class_name))
-            ]
+        # if any(not os.path.isdir(root_dir) for root_dir in root_dirs):
+        #     raise FileNotFoundError(f"One of the directories {root_dirs} not found")
+        # classes = {}
+        # for root_dir in root_dirs:
+        #     if not os.path.isdir(root_dir):
+        #         raise FileNotFoundError(f"Directory {root_dir} not found")
+        #     classes[root_dir] = os.listdir(root_dir)
+        if max_img_per_class is None:
+            max_img_per_class = float("inf")
+        # if max_img_per_class is not None:
+        #     self.files = [
+        #         Image(root_dir, class_name, file_name, transform)
+        #         for root_dir, class_name in classes.items()
+        #         for _, file_name in zip(
+        #             range(max_img_per_class),
+        #             os.listdir(os.path.join(root_dir, class_name)),
+        #         )
+        #     ]
+        # else:
+        self.files = [
+            Image(root_dir, class_name, file_name, transform)
+            for root_dir in root_dirs
+            for class_name in os.listdir(root_dir)
+            for i, file_name in zip(
+                count(), os.listdir(os.path.join(root_dir, class_name))
+            )
+            if i < max_img_per_class
+        ]
         self.pairse = list(combinations(self.files, 2))
 
     def __len__(self):
@@ -92,8 +104,7 @@ class ImagePairsDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[tuple[np.ndarray, np.ndarray], int]:
         """
         Returns a tuple of two images and a label,
-        where the label is 1 if the images are of the same class, 0 otherwise.
-
+        where the label is 0 if the images are from same class, 1 otherwise.
         Args:
             idx (int): Index of the pair
 
@@ -101,7 +112,7 @@ class ImagePairsDataset(Dataset):
             tuple: (image1, image2), label
         """
         img1, img2 = self.pairse[idx]
-        return img1.image, img2.image, int(img1.class_name == img2.class_name)
+        return img1.image, img2.image, int(img1.class_name != img2.class_name)
 
 
 if __name__ == "__main__":

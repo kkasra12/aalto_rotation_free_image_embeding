@@ -2,3 +2,5 @@
 /__pycache__
 /wandb
 slurm*.out
+run*.json
+batch_trainer_.sh
