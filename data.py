@@ -117,9 +117,11 @@ class ImagePairsDataset(Dataset):
 
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
+    from sys import argv
+    data_folder = "/home/kasra/datasets/tanks_and_temples/images" if len(argv) < 2 else argv[1]
 
     dataset = ImagePairsDataset(
-        "/home/kasra/datasets/tanks_and_temples/images",
+        data_folder,
         transform=v2.Compose(
             [
                 # v2.ToDtype(torch.float32, scale=True),
