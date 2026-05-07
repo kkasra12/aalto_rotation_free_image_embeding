@@ -12,9 +12,13 @@ This module contains the dataset class for the image pairs dataset.
     The `__getitem__` method returns a tuple of two images and a label, where the label is 1 if the images are of the same class, 0 otherwise.
 """
 
+from collections.abc import Callable
 from functools import lru_cache
 from itertools import combinations, count
 import os
+from pathlib import Path
+from random import shuffle
+import shutil
 from typing import Optional
 import numpy as np
 import torch
@@ -31,7 +35,7 @@ class Image:
         root_dir: str | os.PathLike,
         class_name: str,
         file_name: str,
-        transform: callable = None,
+        transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     ):
         # if class_name not in os.listdir(root_dir):
         #     raise FileNotFoundError(f"Class {class_name} not found in {root_dir}")
@@ -59,13 +63,14 @@ class ImagePairsDataset(Dataset):
     def __init__(
         self,
         root_dirs: list[str | os.PathLike] | str | os.PathLike,
-        transform=None,
-        seed: int = None,
-        max_img_per_class: Optional[int] = None,
+        transform: Optional[Callable] = None,
+        seed: Optional[int] = None,
+        max_img_per_class: Optional[float] = None,
     ):
         if isinstance(root_dirs, str):
             root_dirs = [root_dirs]
         self.root_dirs = root_dirs
+        assert isinstance(root_dirs, list) and all(isinstance(root_dir, (str, os.PathLike)) for root_dir in root_dirs), "root_dirs should be a list of strings or os.PathLike objects"
         if seed:
             torch.manual_seed(seed)
         # if any(not os.path.isdir(root_dir) for root_dir in root_dirs):
@@ -77,6 +82,7 @@ class ImagePairsDataset(Dataset):
         #     classes[root_dir] = os.listdir(root_dir)
         if max_img_per_class is None:
             max_img_per_class = float("inf")
+        assert max_img_per_class is not None, "max_img_per_class should be a positive integer or None"
         # if max_img_per_class is not None:
         #     self.files = [
         #         Image(root_dir, class_name, file_name, transform)
@@ -101,7 +107,7 @@ class ImagePairsDataset(Dataset):
     def __len__(self):
         return len(self.pairse)
 
-    def __getitem__(self, idx: int) -> tuple[tuple[np.ndarray, np.ndarray], int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         """
         Returns a tuple of two images and a label,
         where the label is 0 if the images are from same class, 1 otherwise.
