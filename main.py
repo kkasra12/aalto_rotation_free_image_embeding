@@ -1,5 +1,6 @@
 from ast import parse
 import os
+from typing import Optional
 import torch
 import torch.utils
 import torch.utils.data
@@ -15,31 +16,35 @@ from rich.table import Table
 
 def create_datasets(
     train_folder: str | os.PathLike,
-    test_folder: str | os.PathLike,
     max_img_per_class: int,
     transform=None,
     test_size: float = 0.2,
+    test_folder: Optional[str | os.PathLike] = None,
 ):
     """
     creates test and train dataset
 
     Args:
     train_folder: str|os.PathLike: path to the training folder
-    test_folder: str|os.PathLike: path to the testing folder
+    test_folder: str|os.PathLike: path to the testing folder, will be ignored if test_size is more than zero
     max_img_per_class: int: max images per class
     transform: torchvision.transforms.Compose: transformation for the images
     test_size: float: portion of the test dataset,
                                if zero, the test dataset will be created from the test folder
                                and the train folder will be used for the train dataset.
-                               if more than zero, the test and train folders will be combined
+                               if more than zero, the train folders will be used only
                                and the test_size will be used to split the dataset into test and train datasets.
                                will raise an error if the value
                                is less than zero or more than one.
 
     """
     if 0 < test_size < 1:
+        if test_folder is not None:
+            print(
+                "Warning: test_folder argument will be ignored since test_size is more than zero"
+            )
         dataset = ImagePairsDataset(
-            root_dirs=[train_folder, test_folder],
+            root_dirs=train_folder,
             transform=transform,
             max_img_per_class=max_img_per_class,
         )
@@ -49,6 +54,10 @@ def create_datasets(
             dataset, [train_len, test_len]
         )
     elif test_size == 0:
+        if test_folder is None:
+            raise ValueError(
+                "test_folder argument is required when test_size is zero"
+            )
         train_dataset = ImagePairsDataset(
             root_dirs=train_folder,
             transform=transform,
