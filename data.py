@@ -121,6 +121,82 @@ class ImagePairsDataset(Dataset):
         return img1.image, img2.image, int(img1.class_name != img2.class_name)
 
 
+def train_test_split(
+    folder: str | os.PathLike, test_size: float, transform=None, dest_folder: Optional[str | os.PathLike] = None
+):
+    """this will copy random `test_size` portion of the image in folder to dest_folder, 
+    we assume the folder format is like this:
+     folder
+     |
+     |- class1
+     |- class2
+     |- class3
+        ...
+
+    and each classs has some images in it, the function will copy random `test_size` portion of the images in each class to dest_folder, and the rest of the images will be kept in same place.
+    check the description of the `dest_folder` argument to see if function will copy or move the images.
+    Args:
+        folder (str | os.PathLike): the folder containing the images, the format of the folder should be like this:
+        test_size (float): the portion of the images to be copied to dest_folder, should be between 0 and 1.
+        transform (_type_, optional): not implemented yet. Defaults to None.
+        dest_folder (Optional[str  |  os.PathLike], optional): if none, the images will be moved to and the folder will change in place, otherwise we will copy them in other folder. Defaults to None.
+    """
+    if transform:
+        raise NotImplementedError("transform argument is not implemented yet")
+    if not (0 < test_size < 1):
+        raise ValueError(f"test_size should be between 0 and 1, not {test_size}")
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(f"Directory {folder} not found")
+    else:
+        folder = Path(folder)
+    if dest_folder is not None:
+        if not os.path.isdir(dest_folder):
+            raise FileExistsError(f"Directory {dest_folder} exists")
+        else:
+            dest_folder = Path(dest_folder)
+            dest_folder.mkdir(parents=True, exist_ok=False)
+    else:
+        dest_folder = folder
+
+    test_folder = folder / "test"
+    train_folder = folder / "train"
+    if test_folder.exists() or train_folder.exists():
+        raise FileExistsError(f"Directory {test_folder} or {train_folder} exists")
+    test_folder.mkdir(parents=True, exist_ok=False)
+    train_folder.mkdir(parents=True, exist_ok=False)
+
+
+    for class_name in folder.iterdir():
+        if not class_name.is_dir() or class_name.name in ["test", "train"]:
+            continue
+        print(f"Processing class {class_name.name}...")
+        images = list(class_name.iterdir())
+        shuffle(images)
+        test_images = images[: int(len(images) * test_size)]
+
+        class_train_folder = train_folder / class_name.name
+        class_train_folder.mkdir(parents=True, exist_ok=False)
+        class_test_folder = test_folder / class_name.name
+        class_test_folder.mkdir(parents=True, exist_ok=False)
+
+
+
+        if dest_folder is not None:
+            copy_or_move = shutil.copy
+        else:
+            copy_or_move = shutil.move
+                
+        for img in test_images:
+            copy_or_move(img, class_test_folder / img.name)
+        for img in images[int(len(images) * test_size) :]:
+            copy_or_move(img, class_train_folder / img.name)
+
+        if dest_folder is None:
+            class_name.unlink()
+
+    
+ 
+
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
     from sys import argv
