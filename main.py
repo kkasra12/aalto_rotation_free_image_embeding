@@ -236,7 +236,12 @@ if __name__ == "__main__":
         help="Path to the json file containing the model parameters, "
         "if this argument provided, all other arguments will be ignored",
     )
-
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to save the model checkpoints, if not provided, the checkpoints will not be saved",
+    )
     args = parser.parse_args()
     if args.json is not None:
         import json
@@ -262,6 +267,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         use_wandb=args.use_wandb,
         transform=None,
+        checkpoint_path=args.checkpoint_path,
         model_kwargs={
             "cnn_model": args.cnn,
             "loss_margin": args.loss_margin,

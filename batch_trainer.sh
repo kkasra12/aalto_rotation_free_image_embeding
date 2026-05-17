@@ -14,15 +14,22 @@ print_error_and_exit() {
 module purge || print_error_and_exit "No 'modulcae' command"
 # module load numlib/cuDNN   # Example with cuDNN
 
+
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK # Propagate Slurm 'cpus-per-task' to srun
 # module load lang/python3
 echo "Running on $(hostname)"
 conda activate llama_env
 echo "Running main.py"
-srun --unbuffered python main.py \
-    --train "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/train" \
-    --test "/home/users/keskandarizanjani/datasets/tanks_and_temples/images_test_train/test" \
-    -m 100
+mkdir -p checkpoints
+for config in train_json/config_*.json; do
+    echo "Using config: $config"
+    echo " ----------------------------------------"
+    checkpoint_dir=$(basename "$config" .json | cut -d_ -f2-)
+    srun --unbuffered python main.py \
+        --train "/home/users/keskandarizanjani/datasets/tanks_and_temples" \
+        --checkpoint_dir "checkpoints/$checkpoint_dir" \
+        -m 100
+done
 echo "Done"
 # to run this file we can use the following command
 # sbatch train_model.sh
