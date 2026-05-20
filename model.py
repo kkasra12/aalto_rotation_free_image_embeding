@@ -35,7 +35,7 @@ def find_output_size(model, input_size):
 class ImageEmbeding(nn.Module):
     def __init__(
         self,
-        input_shape: tuple[int],
+        input_shape: tuple[int, ...],
         distance="euclidean",
         embedding_size=128,
         cnn_model="resnet18",
@@ -55,7 +55,8 @@ class ImageEmbeding(nn.Module):
             self.preprocess = models.resnet18(
                 weights=models.ResNet18_Weights.IMAGENET1K_V1
             )
-            self.preprocess.fc = nn.Identity()
+            assert hasattr(self.preprocess, "fc") and hasattr(self.preprocess, "conv1"), "ResNet18 model does not have fc or conv1 layer"
+            self.preprocess.fc = nn.Identity() # pyright: ignore[reportAttributeAccessIssue]
             self.preprocess.conv1 = nn.Conv2d(
                 in_channels=input_shape[0],
                 out_channels=64,
@@ -66,7 +67,8 @@ class ImageEmbeding(nn.Module):
             )
         elif cnn_model == "resnet50":
             self.preprocess = models.resnet50(pretrained=True)
-            self.preprocess.fc = nn.Identity()
+            assert hasattr(self.preprocess, "fc") and hasattr(self.preprocess, "conv1"), "ResNet50 model does not have fc or conv1 layer"
+            self.preprocess.fc = nn.Identity() # pyright: ignore[reportAttributeAccessIssue]
             self.preprocess.conv1 = nn.Conv2d(
                 in_channels=input_shape[0],
                 out_channels=64,
@@ -162,7 +164,7 @@ class ImageEmbeding(nn.Module):
         self,
         dataloader: torch.utils.data.DataLoader,
         epochs: int,
-        test_dataloader: torch.utils.data.DataLoader = None,
+        test_dataloader: Optional[torch.utils.data.DataLoader] = None,
         optimizer: Optional[torch.optim.Optimizer | str] = None,
         use_wandb: bool = False,
         checkpoint_path: Optional[str] = None,
@@ -269,12 +271,13 @@ class ImageEmbeding(nn.Module):
 
                 self.train()
             if checkpoint_path:
-                self.save(
-                    os.path.join(
-                        checkpoint_path,
-                        f"checkpoint_{wandb.run.id}_{wandb.run.name}.pth",
+                if wandb.run is not None:
+                    self.save(
+                        os.path.join(
+                            checkpoint_path,
+                            f"checkpoint_{wandb.run.id}_{wandb.run.name}.pth",
+                        )
                     )
-                )
 
         if use_wandb:
             wandb.finish()
@@ -294,5 +297,12 @@ class ImageEmbeding(nn.Module):
         torch.save(self.state_dict(), path)
 
     def load(self, path: str | os.PathLike):
-        self.load_state_dict(torch.load(path))
+        self.load_state_dict(torch.load(path), strict=False)
         return self
+
+    def predict_is_same_scene(self, img1: torch.Tensor, img2: torch.Tensor, threshold: float):
+        with torch.no_grad():
+            distance = self.predict(img1, img2)
+            return distance < threshold
+        
+    
