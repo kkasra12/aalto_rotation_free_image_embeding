@@ -1,5 +1,6 @@
-numpy==2.1.0
-rich==13.7.1
-torch==2.2.1
-torchvision==0.17.1
+numpy
+rich
+torch
+torchvision
 wandb
+scikit-learn

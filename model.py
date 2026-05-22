@@ -55,8 +55,10 @@ class ImageEmbeding(nn.Module):
             self.preprocess = models.resnet18(
                 weights=models.ResNet18_Weights.IMAGENET1K_V1
             )
-            assert hasattr(self.preprocess, "fc") and hasattr(self.preprocess, "conv1"), "ResNet18 model does not have fc or conv1 layer"
-            self.preprocess.fc = nn.Identity() # pyright: ignore[reportAttributeAccessIssue]
+            assert hasattr(self.preprocess, "fc") and hasattr(
+                self.preprocess, "conv1"
+            ), "ResNet18 model does not have fc or conv1 layer"
+            self.preprocess.fc = nn.Identity()  # pyright: ignore[reportAttributeAccessIssue]
             self.preprocess.conv1 = nn.Conv2d(
                 in_channels=input_shape[0],
                 out_channels=64,
@@ -67,8 +69,10 @@ class ImageEmbeding(nn.Module):
             )
         elif cnn_model == "resnet50":
             self.preprocess = models.resnet50(pretrained=True)
-            assert hasattr(self.preprocess, "fc") and hasattr(self.preprocess, "conv1"), "ResNet50 model does not have fc or conv1 layer"
-            self.preprocess.fc = nn.Identity() # pyright: ignore[reportAttributeAccessIssue]
+            assert hasattr(self.preprocess, "fc") and hasattr(
+                self.preprocess, "conv1"
+            ), "ResNet50 model does not have fc or conv1 layer"
+            self.preprocess.fc = nn.Identity()  # pyright: ignore[reportAttributeAccessIssue]
             self.preprocess.conv1 = nn.Conv2d(
                 in_channels=input_shape[0],
                 out_channels=64,
@@ -112,11 +116,8 @@ class ImageEmbeding(nn.Module):
         # the output of distance functions is (batch_size,) which is the distance between the two embeddings
 
         if loss_function == "linear":
-            self.loss_function = (
-                lambda dx, y: (
-                    (1 - y) * dx**2 + y * torch.clamp(loss_margin - dx, min=0) ** 2
-                )
-                / 2
+            self.loss_function = lambda dx, y: (
+                ((1 - y) * dx**2 + y * torch.clamp(loss_margin - dx, min=0) ** 2) / 2
             )
         # the input of loss function is two matrix of size (batch_size, )
         # the output of loss function is (batch_size, ) which is the loss for each pair
@@ -241,7 +242,7 @@ class ImageEmbeding(nn.Module):
                 loss = train_loss / count
                 if use_wandb:
                     wandb.log({"train_loss": loss})
-                print(f"Epoch {epoch+1}/{epochs}, Loss: {loss}")
+                print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss}")
             if test_dataloader:
                 self.eval()
                 print("Testing...")
@@ -285,6 +286,7 @@ class ImageEmbeding(nn.Module):
         return self
 
     def predict(self, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
+        # TODO: we should have correct annotation for distance_function!
         with torch.no_grad():
             dx = self.distance_function(self(img1), self(img2))
             return dx
@@ -300,9 +302,9 @@ class ImageEmbeding(nn.Module):
         self.load_state_dict(torch.load(path), strict=False)
         return self
 
-    def predict_is_same_scene(self, img1: torch.Tensor, img2: torch.Tensor, threshold: float):
+    def predict_is_same_scene(
+        self, img1: torch.Tensor, img2: torch.Tensor, threshold: float
+    ):
         with torch.no_grad():
             distance = self.predict(img1, img2)
             return distance < threshold
-        
-    
