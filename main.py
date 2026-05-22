@@ -1,5 +1,5 @@
-from ast import parse
 import os
+import platform
 from typing import Optional
 import torch
 import torch.utils
@@ -55,9 +55,7 @@ def create_datasets(
         )
     elif test_size == 0:
         if test_folder is None:
-            raise ValueError(
-                "test_folder argument is required when test_size is zero"
-            )
+            raise ValueError("test_folder argument is required when test_size is zero")
         train_dataset = ImagePairsDataset(
             root_dirs=train_folder,
             transform=transform,
@@ -136,7 +134,7 @@ def main(
                 "epochs": epochs,
                 "checkpoint_path": checkpoint_path,
                 "device": device,
-                "node": os.uname().nodename,
+                "node": platform.node(),
                 "test_size": test_size,
             },
         )
