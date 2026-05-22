@@ -1,1 +1,8 @@
-{"cnn": "simple", "loss-margin": 1.0, "distance": "cosine"}
+{
+  "cnn": "simple",
+  "loss-margin": 1.0,
+  "distance": "cosine",
+  "checkpoint_path": "checkpoints/simple_cosine",
+  "train": "/home/users/keskandarizanjani/datasets/tanks_and_temples",
+  "m": 150
+}

@@ -1,1 +1,8 @@
-{"cnn": "resnet18", "loss-margin": 1.0, "distance": "cosine"}
+{
+  "cnn": "resnet18",
+  "loss-margin": 1.0,
+  "distance": "cosine",
+  "checkpoint_path": "checkpoints/resnet18_cosine",
+  "train": "/home/users/keskandarizanjani/datasets/tanks_and_temples",
+  "m": 150
+}

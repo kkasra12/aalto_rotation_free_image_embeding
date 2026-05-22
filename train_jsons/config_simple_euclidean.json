@@ -1,1 +1,8 @@
-{"cnn": "simple", "loss-margin": 1.0, "distance": "euclidean"}
+{
+  "cnn": "simple",
+  "loss-margin": 1.0,
+  "distance": "euclidean",
+  "checkpoint_path": "checkpoints/simple_euclidean",
+  "train": "/home/users/keskandarizanjani/datasets/tanks_and_temples",
+  "m": 150
+}
