@@ -4,3 +4,6 @@
 slurm*.out
 run*.json
 batch_trainer_.sh
+.vevn
+*.pth
+.vscode
