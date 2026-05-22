@@ -11,25 +11,41 @@ print_error_and_exit() {
     echo "***ERROR*** $*"
     exit 1
 }
-module purge || print_error_and_exit "No 'modulcae' command"
-# module load numlib/cuDNN   # Example with cuDNN
 
+module purge || print_error_and_exit "No 'module' command"
+module load lang/Python/3.11.5-GCCcore-13.2.0
+export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
-export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK # Propagate Slurm 'cpus-per-task' to srun
-# module load lang/python3
+# Ensure we're in the submission directory
+cd "$SLURM_SUBMIT_DIR" || print_error_and_exit "Cannot cd to SLURM_SUBMIT_DIR"
+
 echo "Running on $(hostname)"
-conda activate llama_env
+echo "Working directory: $(pwd)"
+
+source .venv/bin/activate
+
 echo "Running main.py"
 mkdir -p checkpoints
-for config in train_json/config_*.json; do
+
+# Enable nullglob so the loop is skipped (not literal) if no files match
+shopt -s nullglob
+configs=(train_jsons/config_*.json)
+shopt -u nullglob
+
+if [ ${#configs[@]} -eq 0 ]; then
+    print_error_and_exit "No config files found in train_json/"
+else
+    echo "${configs[@]}"
+fi
+
+for config in "${configs[@]}"; do
     echo "Using config: $config"
+    echo " ----------------------------------------"
+    cat $config
     echo " ----------------------------------------"
     checkpoint_dir=$(basename "$config" .json | cut -d_ -f2-)
     srun --unbuffered python main.py \
-        --train "/home/users/keskandarizanjani/datasets/tanks_and_temples" \
-        --checkpoint_dir "checkpoints/$checkpoint_dir" \
-        -m 100
+        --json "${config}"
 done
+
 echo "Done"
-# to run this file we can use the following command
-# sbatch train_model.sh
