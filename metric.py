@@ -202,7 +202,7 @@ def create_metric_table(
             f"file name is {checkpoint_file} Evaluating {cnn_model} with {distance_metric}..."
         )
         model = ImageEmbeding(
-            input_shape=(3, 224, 224), cnn_model="simple", distance=distance_metric
+            input_shape=(3, 224, 224), cnn_model=cnn_model, distance=distance_metric
         ).load(checkpoint_file)
         metric_value = metric_func(dataset, model)
         print(f"Metric value for {cnn_model} with {distance_metric}: {metric_value}")
@@ -275,7 +275,9 @@ def evaluate_all_checkpoints(
         (acc_table, auc_table) — dicts keyed by (cnn_model, distance_metric)
     """
     if save_format not in (None, "json", "tex"):
-        raise ValueError(f"save_format must be None, 'json', or 'tex', got '{save_format}'")
+        raise ValueError(
+            f"save_format must be None, 'json', or 'tex', got '{save_format}'"
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     acc_table: dict = {}
@@ -307,15 +309,23 @@ def evaluate_all_checkpoints(
     if save_format == "json":
         serialisable_acc = {f"{c}_{d}": v for (c, d), v in acc_table.items()}
         serialisable_auc = {f"{c}_{d}": v for (c, d), v in auc_table.items()}
-        (output_dir / "accuracy.json").write_text(json.dumps(serialisable_acc, indent=2))
+        (output_dir / "accuracy.json").write_text(
+            json.dumps(serialisable_acc, indent=2)
+        )
         (output_dir / "auc.json").write_text(json.dumps(serialisable_auc, indent=2))
-        print(f"Saved tables -> {output_dir / 'accuracy.json'}, {output_dir / 'auc.json'}")
+        print(
+            f"Saved tables -> {output_dir / 'accuracy.json'}, {output_dir / 'auc.json'}"
+        )
     elif save_format == "tex":
-        acc_tex = dict_to_latex_table(acc_table, caption="Accuracy", label="tab:accuracy")
+        acc_tex = dict_to_latex_table(
+            acc_table, caption="Accuracy", label="tab:accuracy"
+        )
         auc_tex = dict_to_latex_table(auc_table, caption="AUC", label="tab:auc")
         (output_dir / "accuracy.tex").write_text(acc_tex)
         (output_dir / "auc.tex").write_text(auc_tex)
-        print(f"Saved tables -> {output_dir / 'accuracy.tex'}, {output_dir / 'auc.tex'}")
+        print(
+            f"Saved tables -> {output_dir / 'accuracy.tex'}, {output_dir / 'auc.tex'}"
+        )
 
     return acc_table, auc_table
 
@@ -332,7 +342,7 @@ if __name__ == "__main__":
         [v2.Resize((224, 224)), v2.ToDtype(torch.float32, scale=True)]
     )
     dataset = ImagePairsDataset(
-        "C:/Users/kkasr/Downloads/tanks_and_templates/",
+        "/home/users/pemami/datasets/tanks_and_temples",
         transform=transform,
         max_img_per_class=10,
     )
