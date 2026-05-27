@@ -61,7 +61,7 @@ def calculate_AOC(dataset: ImagePairsDataset, model: ImageEmbeding):
             "Distance and label batch sizes do not match"
         )
         distances.append(distance)
-        labels.append(label)
+        labels.append(label.cpu().numpy())
 
     distances = np.concatenate(distances)
     labels = np.concatenate(labels)
@@ -93,7 +93,7 @@ def calculate_full_distance_distribution(
             "Distance and label batch sizes do not match"
         )
         distances.append(distance)
-        labels.append(label)
+        labels.append(label.cpu().numpy())
 
     distances = np.concatenate(distances)
     labels = np.concatenate(labels)
@@ -342,7 +342,8 @@ if __name__ == "__main__":
         [v2.Resize((224, 224)), v2.ToDtype(torch.float32, scale=True)]
     )
     dataset = ImagePairsDataset(
-        "/home/users/pemami/datasets/tanks_and_temples",
+        # "/home/users/pemami/datasets/tanks_and_temples",
+        r"C:\Users\kkasr\Downloads\tanks_and_templates",
         transform=transform,
         max_img_per_class=10,
     )
