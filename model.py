@@ -50,6 +50,7 @@ class ImageEmbeding(nn.Module):
             )
         self.distance = distance
         self.embedding_size = embedding_size
+        self.cnn_model = cnn_model
 
         if cnn_model == "resnet18":
             self.preprocess = models.resnet18(
@@ -172,16 +173,26 @@ class ImageEmbeding(nn.Module):
         **kwargs,
     ):
         self.train()
+        if self.cnn_model.startswith("resnet"):
+            weight_decay = kwargs.get("weight_decay", 1e-4)
+        else:
+            weight_decay = kwargs.get("weight_decay", 0)
         if optimizer is None:
-            optimizer = torch.optim.Adam(self.parameters(), lr=kwargs.get("lr", 1e-3))
+            optimizer = torch.optim.Adam(
+                self.parameters(), lr=kwargs.get("lr", 1e-3), weight_decay=weight_decay
+            )
         elif isinstance(optimizer, str):
             if optimizer == "adam":
                 optimizer = torch.optim.Adam(
-                    self.parameters(), lr=kwargs.get("lr", 1e-3)
+                    self.parameters(),
+                    lr=kwargs.get("lr", 1e-3),
+                    weight_decay=weight_decay,
                 )
             elif optimizer == "sgd":
                 optimizer = torch.optim.SGD(
-                    self.parameters(), lr=kwargs.get("lr", 1e-3)
+                    self.parameters(),
+                    lr=kwargs.get("lr", 1e-3),
+                    weight_decay=weight_decay,
                 )
             else:
                 raise ValueError(
