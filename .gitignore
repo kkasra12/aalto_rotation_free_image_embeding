@@ -7,3 +7,7 @@ batch_trainer_.sh
 .vevn
 *.pth
 .vscode
+plots*
+result_tmp.zip
+.env
+result_tmp.md

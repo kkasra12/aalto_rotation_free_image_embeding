@@ -4,3 +4,9 @@ torch
 torchvision
 wandb
 scikit-learn
+
+# GUI 
+gradio 
+matplotlib 
+pillow
+python-dotenv
