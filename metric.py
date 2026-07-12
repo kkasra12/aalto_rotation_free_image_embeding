@@ -123,7 +123,13 @@ def plot_distance_distribution(
     same = scores[labels == 1]
     diff = scores[labels == 0]
 
-    _, ax = plt.subplots(figsize=(8, 5))
+    FONT_LABEL = 16
+    FONT_TICK = 14
+    FONT_LEGEND = 14
+    FONT_TITLE = 17
+    LINE_WIDTH = 1.8
+
+    _, ax = plt.subplots(figsize=(7, 4.5))
 
     if kind == "histogram":
         bins = np.linspace(scores.min(), scores.max(), 25)
@@ -148,12 +154,12 @@ def plot_distance_distribution(
             threshold,
             color="black",
             linestyle="--",
-            linewidth=1.2,
+            linewidth=LINE_WIDTH,
             label=f"Midpoint threshold ({threshold:.2f})",
         )
-        ax.set_xlabel("Similarity score", fontsize=12)
-        ax.set_ylabel("Density", fontsize=12)
-        ax.legend(fontsize=11)
+        ax.set_xlabel("Similarity score", fontsize=FONT_LABEL, fontweight="bold")
+        ax.set_ylabel("Density", fontsize=FONT_LABEL, fontweight="bold")
+        ax.legend(fontsize=FONT_LEGEND)
     elif kind == "violin":
         parts = ax.violinplot([diff, same], positions=[0, 1], showmedians=True)
         colors = ["#e05c5c", "#4c9be8"]
@@ -162,19 +168,20 @@ def plot_distance_distribution(
             body.set_alpha(0.7)
         for key in ("cmedians", "cmins", "cmaxes", "cbars"):
             parts[key].set_color("black")
-            parts[key].set_linewidth(1.2)
+            parts[key].set_linewidth(LINE_WIDTH)
         ax.set_xticks([0, 1])
-        ax.set_xticklabels(["Different scene", "Same scene"], fontsize=12)
-        ax.set_ylabel("Similarity score", fontsize=12)
+        ax.set_xticklabels(["Different scene", "Same scene"], fontsize=FONT_TICK)
+        ax.set_ylabel("Similarity score", fontsize=FONT_LABEL)
     else:
         raise ValueError(f"kind must be 'histogram' or 'violin', got '{kind}'")
 
-    ax.set_title(title, fontsize=13)
+    ax.set_title(title, fontsize=FONT_TITLE)
+    ax.tick_params(axis="both", labelsize=FONT_TICK)
     ax.spines[["top", "right"]].set_visible(False)
 
     plt.tight_layout()
     if save_path is not None:
-        plt.savefig(save_path, dpi=150)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.close()
     else:
         plt.show()
@@ -284,9 +291,18 @@ def evaluate_all_checkpoints(
     auc_table: dict = {}
 
     for checkpoint_file in checkpoint_dir.rglob("checkpoint_*.pth"):
+        siblings = sorted(
+            checkpoint_file.parent.glob("checkpoint_*.pth"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if checkpoint_file != siblings[-1]:
+            continue
+
         cnn_model, distance_metric = checkpoint_file.parent.name.split("_")
         key = (cnn_model, distance_metric)
-        print(f"Evaluating {cnn_model} + {distance_metric} ...")
+        print(
+            f"Evaluating {cnn_model} + {distance_metric} with model name {checkpoint_file} ..."
+        )
 
         model = ImageEmbeding(
             input_shape=(3, 224, 224), cnn_model=cnn_model, distance=distance_metric
