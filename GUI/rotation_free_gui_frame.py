@@ -10,6 +10,10 @@ Optional runtime settings::
     MODEL_DEVICE=auto
     MAX_IMAGES_PER_CLASS=10
 
+Histogram cache settings::
+
+    HISTOGRAM_CACHE_ROOT=C:/absolute/path/to/histogram/cache
+
 Each direct child directory of ``DATASET_ROOT`` is treated as one image class.
 Checkpoint subdirectories must follow ``<backbone>_<distance>`` and contain
 files matching ``checkpoint_*.pth``.
@@ -26,7 +30,6 @@ from threading import RLock
 from typing import Any
 
 import gradio as gr
-import matplotlib.pyplot as plt
 import numpy as np
 from dotenv import load_dotenv
 from matplotlib.figure import Figure
@@ -37,12 +40,21 @@ LOGGER = logging.getLogger(__name__)
 GUI_DIRECTORY = Path(__file__).resolve().parent
 PROJECT_ROOT = GUI_DIRECTORY.parent
 ENV_PATH = PROJECT_ROOT / ".env"
+HISTOGRAM_CACHE_DATABASE = GUI_DIRECTORY / "histogram_cache.sqlite3"
 
 # Running ``python .\GUI\rotation_free_gui_frame.py`` places GUI, rather than
 # the project root, first on sys.path. Add the root so data.py, metric.py, and
 # model.py can be imported lazily by the callbacks.
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from GUI.histogram_cache import (  # noqa: E402
+    HistogramCacheKey,
+    HistogramData,
+    get_model_last_change_time,
+    get_or_create_histogram_data,
+    histogram_data_from_distribution,
+)
 
 load_dotenv(ENV_PATH)
 
@@ -94,6 +106,26 @@ def get_configured_directory(
 
     resolved_directory = directory.resolve()
     return resolved_directory, f"{display_name} connected: {resolved_directory}"
+
+
+def get_histogram_cache_directory() -> tuple[Path | None, str]:
+    """Return the configured absolute cache directory, creating it if needed."""
+    configured_path = os.getenv("HISTOGRAM_CACHE_ROOT", "").strip()
+    if not configured_path:
+        return None, f"HISTOGRAM_CACHE_ROOT is not set in {ENV_PATH}"
+
+    directory = Path(configured_path).expanduser()
+    if not directory.is_absolute():
+        return None, "HISTOGRAM_CACHE_ROOT must be an absolute path."
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        resolved_directory = directory.resolve()
+    except OSError as error:
+        return None, f"Histogram cache is unavailable: {error}"
+    if not resolved_directory.is_dir():
+        return None, f"HISTOGRAM_CACHE_ROOT is not a directory: {resolved_directory}"
+    return resolved_directory, f"Histogram cache connected: {resolved_directory}"
 
 
 def get_max_images_per_class() -> int:
@@ -265,12 +297,11 @@ def create_evaluation_dataset(
     )
 
 
-def create_distance_histogram(
+def calculate_distance_histogram_data(
     model: Any,
     dataset_root: Path,
-    title: str,
-) -> Figure:
-    """Calculate and plot the model's same/different-class distribution."""
+) -> HistogramData:
+    """Calculate the numerical values used by a model distance histogram."""
     import torch
 
     from metric import calculate_full_distance_distribution
@@ -281,53 +312,39 @@ def create_distance_histogram(
     )
     with torch.inference_mode():
         distribution = calculate_full_distance_distribution(dataset, model)
+    return histogram_data_from_distribution(distribution)
 
-    if distribution.ndim != 2 or distribution.shape[1] != 2:
-        raise ValueError("Distance distribution must have shape (N, 2).")
 
-    scores = distribution[:, 0]
-    labels = distribution[:, 1].astype(int)
-    same_class = scores[labels == 1]
-    different_class = scores[labels == 0]
-
-    if same_class.size == 0 or different_class.size == 0:
-        raise ValueError(
-            "The evaluation dataset must contain both same-class and "
-            "different-class pairs."
-        )
-
-    minimum_score = float(scores.min())
-    maximum_score = float(scores.max())
-    if np.isclose(minimum_score, maximum_score):
-        minimum_score -= 0.5
-        maximum_score += 0.5
-
-    figure, axis = plt.subplots(figsize=(7.2, 5.2))
-    bins = np.linspace(minimum_score, maximum_score, 25)
-    axis.hist(
-        different_class,
-        bins=bins,
+def create_distance_histogram(data: HistogramData, title: str) -> Figure:
+    """Plot a model's cached or freshly calculated histogram values."""
+    figure = Figure(figsize=(7.2, 5.2))
+    axis = figure.subplots()
+    bin_widths = np.diff(data.bin_edges)
+    axis.bar(
+        data.bin_edges[:-1],
+        data.different_class_heights,
+        width=bin_widths,
+        align="edge",
         color="#ef4444",
         alpha=0.65,
-        density=True,
         label="Different class",
     )
-    axis.hist(
-        same_class,
-        bins=bins,
+    axis.bar(
+        data.bin_edges[:-1],
+        data.same_class_heights,
+        width=bin_widths,
+        align="edge",
         color="#3b82f6",
         alpha=0.65,
-        density=True,
         label="Same class",
     )
 
-    threshold = float((same_class.mean() + different_class.mean()) / 2)
     axis.axvline(
-        threshold,
+        data.midpoint_threshold,
         color="#111827",
         linewidth=2.2,
         linestyle="--",
-        label=f"Midpoint threshold: {threshold:.3f}",
+        label=f"Midpoint threshold: {data.midpoint_threshold:.3f}",
     )
     axis.set_title(title, fontsize=14, fontweight="bold", pad=12)
     axis.set_xlabel("Distance")
@@ -431,18 +448,49 @@ def load_checkpoint_and_histogram(
                 backbone,
                 distance_function,
             )
+            model_name = checkpoint_path.stem.removeprefix("checkpoint_")
             title = (
                 f"{backbone} + {distance_function}\n"
-                f"{checkpoint_path.stem.removeprefix('checkpoint_')}"
+                f"{model_name}"
             )
-            histogram = create_distance_histogram(model, DATASET_ROOT, title)
+            if HISTOGRAM_CACHE_ROOT is None:
+                histogram_data = calculate_distance_histogram_data(
+                    model,
+                    DATASET_ROOT,
+                )
+                cache_outcome = "uncached"
+            else:
+                cache_key = HistogramCacheKey(
+                    backbone_model=backbone,
+                    distance_function=distance_function,
+                    model_name=model_name,
+                    last_change_time=get_model_last_change_time(checkpoint_path),
+                )
+                histogram_data, cache_outcome = get_or_create_histogram_data(
+                    HISTOGRAM_CACHE_ROOT,
+                    HISTOGRAM_CACHE_DATABASE,
+                    cache_key,
+                    lambda: calculate_distance_histogram_data(
+                        model,
+                        DATASET_ROOT,
+                    ),
+                )
+            histogram = create_distance_histogram(histogram_data, title)
 
             MODEL_CACHE.clear()
             MODEL_CACHE[str(checkpoint_path)] = model
 
+        cache_status = {
+            "loaded": "Histogram loaded from cache.",
+            "cached": "Histogram calculated and cached.",
+            "uncached": "Histogram calculated without caching.",
+        }[cache_outcome]
+        if cache_outcome == "uncached" and HISTOGRAM_CACHE_ROOT is None:
+            cache_status = f"{cache_status} {HISTOGRAM_CACHE_STATUS}"
         status = (
             f"Model loaded on `{get_model_device()}`: "
-            f"**{format_checkpoint_label(checkpoint_path)}**"
+            f"**{format_checkpoint_label(checkpoint_path)}**  \n"
+            f"{cache_status}"
         )
         return str(checkpoint_path), histogram, status, None
     except Exception as error:  # Gradio must remain usable after a failed load.
@@ -611,6 +659,7 @@ CHECKPOINT_ROOT, CHECKPOINT_STATUS = get_configured_directory(
     "CHECKPOINT_ROOT",
     "Checkpoints",
 )
+HISTOGRAM_CACHE_ROOT, HISTOGRAM_CACHE_STATUS = get_histogram_cache_directory()
 
 DATASET_CLASSES = list_dataset_classes(DATASET_ROOT) if DATASET_ROOT else []
 BACKBONES = discover_backbones(CHECKPOINT_ROOT) if CHECKPOINT_ROOT else []
@@ -639,6 +688,7 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
         # Rotation-Free Image Comparison
         <div class="status-line">{DATASET_STATUS}</div>
         <div class="status-line">{CHECKPOINT_STATUS}</div>
+        <div class="status-line">{HISTOGRAM_CACHE_STATUS}</div>
         """,
         elem_classes="app-header",
     )

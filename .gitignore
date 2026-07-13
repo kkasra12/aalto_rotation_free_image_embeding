@@ -11,3 +11,7 @@ plots*
 result_tmp.zip
 .env
 result_tmp.md
+/GUI/histogram_cache.sqlite3
+/GUI/histogram_cache.sqlite3-*
+__pycache__
+GUI/cache/*.npz
