@@ -240,6 +240,11 @@ if __name__ == "__main__":
         default=None,
         help="Path to save the model checkpoints, if not provided, the checkpoints will not be saved",
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the Gradio GUI instead of training",
+    )
     args = parser.parse_args()
     if args.json is not None:
         import json
@@ -247,6 +252,12 @@ if __name__ == "__main__":
         with open(args.json, "r") as f:
             for k, v in json.load(f).items():
                 setattr(args, k, v)
+
+    if args.gui:
+        from GUI.rotation_free_gui_frame import launch_gui
+
+        launch_gui()
+        raise SystemExit(0)
 
     args_table = Table(title="Arguments")
     args_table.add_column("Argument")

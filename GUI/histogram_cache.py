@@ -18,6 +18,15 @@ LOGGER = logging.getLogger(__name__)
 
 CACHE_TABLE = "histogram_cache"
 CACHE_OUTCOME = Literal["loaded", "cached", "uncached"]
+CACHE_FORMAT_VERSION = 1
+CACHE_FORMAT_VERSION_FIELD = "cache_format_version"
+
+_HISTOGRAM_DATA_FIELDS = {
+    "bin_edges",
+    "same_class_heights",
+    "different_class_heights",
+    "midpoint_threshold",
+}
 
 
 @dataclass(frozen=True)
@@ -54,8 +63,8 @@ def histogram_data_from_distribution(distribution: np.ndarray) -> HistogramData:
 
     scores = np.asarray(distribution[:, 0], dtype=float)
     labels = distribution[:, 1].astype(int)
-    same_class = scores[labels == 1]
-    different_class = scores[labels == 0]
+    same_class = scores[labels == 0]
+    different_class = scores[labels == 1]
 
     if same_class.size == 0 or different_class.size == 0:
         raise ValueError(
@@ -208,22 +217,54 @@ def _archive_path(cache_root: Path, data_uuid: str) -> Path:
 
 
 def _load_archive(archive_path: Path) -> HistogramData:
+    is_legacy_archive = False
     with np.load(archive_path, allow_pickle=False) as archive:
-        required_keys = {
-            "bin_edges",
-            "same_class_heights",
-            "different_class_heights",
-            "midpoint_threshold",
-        }
-        if set(archive.files) != required_keys:
+        archive_fields = set(archive.files)
+        if archive_fields == _HISTOGRAM_DATA_FIELDS:
+            # Archives written before CACHE_FORMAT_VERSION stored label 1 as
+            # same-class and label 0 as different-class. The dataset's actual
+            # semantics are the reverse, so migrate by swapping the heights.
+            is_legacy_archive = True
+            same_class_heights = archive["different_class_heights"]
+            different_class_heights = archive["same_class_heights"]
+        elif archive_fields == _HISTOGRAM_DATA_FIELDS | {
+            CACHE_FORMAT_VERSION_FIELD
+        }:
+            version = np.asarray(archive[CACHE_FORMAT_VERSION_FIELD])
+            if (
+                version.shape != ()
+                or not np.issubdtype(version.dtype, np.integer)
+                or int(version) != CACHE_FORMAT_VERSION
+            ):
+                raise ValueError(
+                    "Histogram cache archive has an unsupported version."
+                )
+            same_class_heights = archive["same_class_heights"]
+            different_class_heights = archive["different_class_heights"]
+        else:
             raise ValueError("Histogram cache archive has unexpected fields.")
+
         data = HistogramData(
             bin_edges=archive["bin_edges"],
-            same_class_heights=archive["same_class_heights"],
-            different_class_heights=archive["different_class_heights"],
+            same_class_heights=same_class_heights,
+            different_class_heights=different_class_heights,
             midpoint_threshold=float(archive["midpoint_threshold"]),
         )
-    return validate_histogram_data(data)
+
+    validated_data = validate_histogram_data(data)
+    if is_legacy_archive:
+        try:
+            _write_archive_atomically(archive_path, validated_data)
+        except OSError as error:
+            # The swapped values are still valid for this request. Avoid an
+            # expensive model-wide recalculation when only migration writing
+            # is unavailable; a later read can retry the atomic upgrade.
+            LOGGER.warning(
+                "Could not migrate legacy histogram cache %s: %s",
+                archive_path,
+                error,
+            )
+    return validated_data
 
 
 def _write_archive_atomically(
@@ -244,6 +285,10 @@ def _write_archive_atomically(
                 midpoint_threshold=np.asarray(
                     validated_data.midpoint_threshold,
                     dtype=float,
+                ),
+                cache_format_version=np.asarray(
+                    CACHE_FORMAT_VERSION,
+                    dtype=np.int64,
                 ),
             )
         os.replace(temporary_path, archive_path)

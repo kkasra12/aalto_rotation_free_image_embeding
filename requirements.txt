@@ -9,4 +9,5 @@ scikit-learn
 gradio 
 matplotlib 
 pillow
-python-dotenv
+pydantic>=2,<3
+pydantic-settings>=2,<3

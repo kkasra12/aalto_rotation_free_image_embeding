@@ -20,43 +20,41 @@ files matching ``checkpoint_*.pth``.
 """
 
 import logging
-import os
-import sys
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
-from typing import Any
 
 import gradio as gr
 import numpy as np
-from dotenv import load_dotenv
+import torch
 from matplotlib.figure import Figure
+from PIL import Image
+from torchvision.transforms import v2
 
-
-LOGGER = logging.getLogger(__name__)
-
-GUI_DIRECTORY = Path(__file__).resolve().parent
-PROJECT_ROOT = GUI_DIRECTORY.parent
-ENV_PATH = PROJECT_ROOT / ".env"
-HISTOGRAM_CACHE_DATABASE = GUI_DIRECTORY / "histogram_cache.sqlite3"
-
-# Running ``python .\GUI\rotation_free_gui_frame.py`` places GUI, rather than
-# the project root, first on sys.path. Add the root so data.py, metric.py, and
-# model.py can be imported lazily by the callbacks.
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from GUI.histogram_cache import (  # noqa: E402
+from data import ImagePairsDataset
+from GUI.histogram_cache import (
     HistogramCacheKey,
     HistogramData,
     get_model_last_change_time,
     get_or_create_histogram_data,
     histogram_data_from_distribution,
 )
+from GUI.settings import (
+    GUISettings,
+    get_cache_directory_status,
+    get_existing_directory_status,
+)
+from metric import calculate_full_distance_distribution
+from model import ImageEmbeding
 
-load_dotenv(ENV_PATH)
+
+GUI_DIRECTORY = Path(__file__).resolve().parent
+LOGGER = logging.getLogger(__name__)
+HISTOGRAM_CACHE_DATABASE = GUI_DIRECTORY / "histogram_cache.sqlite3"
+GUI_SETTINGS = GUISettings()
 
 SUPPORTED_IMAGE_EXTENSIONS = {
     ".bmp",
@@ -70,85 +68,20 @@ SUPPORTED_IMAGE_EXTENSIONS = {
 
 # Only the latest selected model is retained. The Gradio state stores its path,
 # not the PyTorch model itself, avoiding a large per-session copy.
-MODEL_CACHE: OrderedDict[str, Any] = OrderedDict()
+MODEL_CACHE: OrderedDict[str, ImageEmbeding] = OrderedDict()
 MODEL_LOCK = RLock()
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+@dataclass(eq=False, frozen=True)
+class HistogramViewState:
+    """Per-session data needed to redraw one checkpoint's histogram."""
 
-
-def get_configured_directory(
-    environment_variable: str,
-    display_name: str,
-) -> tuple[Path | None, str]:
-    """Read and validate an absolute directory configured in ``.env``.
-
-    Args:
-        environment_variable: Name of the environment variable to read.
-        display_name: Human-readable directory name used in status messages.
-
-    Returns:
-        The validated directory, when available, and a status message.
-    """
-    configured_path = os.getenv(environment_variable, "").strip()
-    if not configured_path:
-        return None, f"{environment_variable} is not set in {ENV_PATH}"
-
-    directory = Path(configured_path).expanduser()
-    if not directory.is_absolute():
-        return None, f"{environment_variable} must be an absolute path."
-    if not directory.exists():
-        return None, f"{display_name} directory does not exist: {directory}"
-    if not directory.is_dir():
-        return None, f"{environment_variable} is not a directory: {directory}"
-
-    resolved_directory = directory.resolve()
-    return resolved_directory, f"{display_name} connected: {resolved_directory}"
-
-
-def get_histogram_cache_directory() -> tuple[Path | None, str]:
-    """Return the configured absolute cache directory, creating it if needed."""
-    configured_path = os.getenv("HISTOGRAM_CACHE_ROOT", "").strip()
-    if not configured_path:
-        return None, f"HISTOGRAM_CACHE_ROOT is not set in {ENV_PATH}"
-
-    directory = Path(configured_path).expanduser()
-    if not directory.is_absolute():
-        return None, "HISTOGRAM_CACHE_ROOT must be an absolute path."
-
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        resolved_directory = directory.resolve()
-    except OSError as error:
-        return None, f"Histogram cache is unavailable: {error}"
-    if not resolved_directory.is_dir():
-        return None, f"HISTOGRAM_CACHE_ROOT is not a directory: {resolved_directory}"
-    return resolved_directory, f"Histogram cache connected: {resolved_directory}"
-
-
-def get_max_images_per_class() -> int:
-    """Return the positive dataset sampling limit configured in ``.env``."""
-    raw_value = os.getenv("MAX_IMAGES_PER_CLASS", "10").strip()
-    try:
-        value = int(raw_value)
-    except ValueError as error:
-        raise ValueError("MAX_IMAGES_PER_CLASS must be an integer.") from error
-
-    if value <= 0:
-        raise ValueError("MAX_IMAGES_PER_CLASS must be greater than zero.")
-    return value
-
-
-def get_model_device() -> str:
-    """Return the configured PyTorch device, resolving ``auto`` dynamically."""
-    import torch
-
-    configured_device = os.getenv("MODEL_DEVICE", "auto").strip().casefold()
-    if configured_device == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    return configured_device
+    checkpoint_path: str
+    checkpoint_last_change_time: str
+    backbone_model: str
+    distance_function: str
+    title: str
+    histogram_data: HistogramData
 
 
 # ---------------------------------------------------------------------------
@@ -249,21 +182,15 @@ def load_model(
     checkpoint_path: Path,
     backbone: str,
     distance_function: str,
-) -> Any:
+) -> ImageEmbeding:
     """Construct and load the selected image-embedding model."""
-    from model import ImageEmbeding
-
     model = ImageEmbeding(
         input_shape=(3, 224, 224),
         cnn_model=backbone,
         distance=distance_function,
-        device=get_model_device(),
+        device=GUI_SETTINGS.resolved_model_device,
     ).load(checkpoint_path)
-
-    if hasattr(model, "eval"):
-        model.eval()
-    elif hasattr(model, "model") and hasattr(model.model, "eval"):
-        model.model.eval()
+    model.eval()
     return model
 
 
@@ -274,49 +201,49 @@ def clear_model_cache() -> None:
 
 
 @lru_cache(maxsize=1)
-def create_evaluation_dataset(
-    dataset_root: Path,
-    max_images_per_class: int,
-) -> Any:
-    """Create and cache the pair dataset used for model distributions."""
-    import torch
-    from torchvision.transforms import v2
-
-    from data import ImagePairsDataset
-
-    transform = v2.Compose(
+def create_image_transform() -> v2.Compose:
+    """Return the image preprocessing shared by evaluation and pair inference."""
+    return v2.Compose(
         [
             v2.Resize((224, 224)),
             v2.ToDtype(torch.float32, scale=True),
         ]
     )
+
+
+@lru_cache(maxsize=1)
+def create_evaluation_dataset(
+    dataset_root: Path,
+    max_images_per_class: int,
+) -> ImagePairsDataset:
+    """Create and cache the pair dataset used for model distributions."""
     return ImagePairsDataset(
         str(dataset_root),
-        transform=transform,
+        transform=create_image_transform(),
         max_img_per_class=max_images_per_class,
     )
 
 
 def calculate_distance_histogram_data(
-    model: Any,
+    model: ImageEmbeding,
     dataset_root: Path,
 ) -> HistogramData:
     """Calculate the numerical values used by a model distance histogram."""
-    import torch
-
-    from metric import calculate_full_distance_distribution
-
     dataset = create_evaluation_dataset(
         dataset_root,
-        get_max_images_per_class(),
+        GUI_SETTINGS.max_images_per_class,
     )
     with torch.inference_mode():
         distribution = calculate_full_distance_distribution(dataset, model)
     return histogram_data_from_distribution(distribution)
 
 
-def create_distance_histogram(data: HistogramData, title: str) -> Figure:
-    """Plot a model's cached or freshly calculated histogram values."""
+def create_distance_histogram(
+    data: HistogramData,
+    title: str,
+    selected_pair_distance: float | None = None,
+) -> Figure:
+    """Plot histogram values and optionally mark one selected-pair distance."""
     figure = Figure(figsize=(7.2, 5.2))
     axis = figure.subplots()
     bin_widths = np.diff(data.bin_edges)
@@ -346,6 +273,27 @@ def create_distance_histogram(data: HistogramData, title: str) -> Figure:
         linestyle="--",
         label=f"Midpoint threshold: {data.midpoint_threshold:.3f}",
     )
+    if selected_pair_distance is not None:
+        selected_pair_distance = float(selected_pair_distance)
+        if not np.isfinite(selected_pair_distance):
+            raise ValueError("Selected-pair distance must be finite.")
+        axis.axvline(
+            selected_pair_distance,
+            color="#a855f7",
+            linewidth=3,
+            linestyle="-",
+            zorder=6,
+            label=f"Selected pair: {selected_pair_distance:.4f}",
+        )
+
+        minimum_edge = float(data.bin_edges[0])
+        maximum_edge = float(data.bin_edges[-1])
+        if not minimum_edge <= selected_pair_distance <= maximum_edge:
+            lower_limit = min(minimum_edge, selected_pair_distance)
+            upper_limit = max(maximum_edge, selected_pair_distance)
+            padding = max((upper_limit - lower_limit) * 0.03, 1e-6)
+            axis.set_xlim(lower_limit - padding, upper_limit + padding)
+
     axis.set_title(title, fontsize=14, fontweight="bold", pad=12)
     axis.set_xlabel("Distance")
     axis.set_ylabel("Density")
@@ -357,17 +305,138 @@ def create_distance_histogram(data: HistogramData, title: str) -> Figure:
 
 
 def calculate_pair_distance(
-    model: Any,
+    model: ImageEmbeding,
     left_image: Path,
     right_image: Path,
 ) -> float:
-    """Calculate the distance between the selected images in a later step."""
-    pass
+    """Calculate one model distance using the evaluation preprocessing path."""
+    left_path = resolve_dataset_image_path(left_image)
+    right_path = resolve_dataset_image_path(right_image)
+
+    def prepare_image(image_path: Path) -> torch.Tensor:
+        with Image.open(image_path) as source_image:
+            image = v2.ToImage()(source_image.convert("RGB"))
+        return (
+            create_image_transform()(image)
+            .unsqueeze(0)
+            .to(model.device, dtype=torch.float32)
+        )
+
+    left_tensor = prepare_image(left_path)
+    right_tensor = prepare_image(right_path)
+    with torch.inference_mode():
+        distance_tensor = model.predict(left_tensor, right_tensor)
+
+    if not isinstance(distance_tensor, torch.Tensor) or distance_tensor.numel() != 1:
+        raise ValueError("Model prediction must contain exactly one distance.")
+    distance = float(distance_tensor.detach().cpu().item())
+    if not np.isfinite(distance):
+        raise ValueError("Model prediction returned a non-finite distance.")
+    return distance
+
+
+def resolve_dataset_image_path(image_path: str | Path) -> Path:
+    """Resolve and validate an image path belonging to the configured dataset."""
+    if DATASET_ROOT is None:
+        raise ValueError("The dataset directory is not configured.")
+
+    dataset_root = DATASET_ROOT.resolve()
+    resolved_path = Path(image_path).resolve()
+    try:
+        resolved_path.relative_to(dataset_root)
+    except ValueError as error:
+        raise ValueError("Selected image is outside the configured dataset.") from error
+
+    if not resolved_path.is_file():
+        raise ValueError(f"Selected image does not exist: {resolved_path}")
+    if resolved_path.suffix.casefold() not in SUPPORTED_IMAGE_EXTENSIONS:
+        raise ValueError(f"Unsupported image type: {resolved_path.suffix}")
+    return resolved_path
+
+
+def get_model_for_histogram_view(
+    view_state: HistogramViewState,
+) -> ImageEmbeding:
+    """Return the exact view model, reloading it when another session replaced it."""
+    if CHECKPOINT_ROOT is None:
+        raise ValueError("The checkpoint directory is not configured.")
+
+    checkpoint_path = Path(view_state.checkpoint_path).resolve()
+    valid_checkpoints = discover_checkpoints(
+        CHECKPOINT_ROOT,
+        view_state.backbone_model,
+        view_state.distance_function,
+    )
+    if checkpoint_path not in valid_checkpoints:
+        raise ValueError("The histogram checkpoint is no longer valid.")
+    if get_model_last_change_time(checkpoint_path) != (
+        view_state.checkpoint_last_change_time
+    ):
+        raise ValueError(
+            "The checkpoint changed; select it again to refresh the histogram."
+        )
+
+    cache_key = str(checkpoint_path)
+    model = MODEL_CACHE.get(cache_key)
+    if model is None:
+        model = load_model(
+            checkpoint_path,
+            view_state.backbone_model,
+            view_state.distance_function,
+        )
+        MODEL_CACHE.clear()
+        MODEL_CACHE[cache_key] = model
+    else:
+        MODEL_CACHE.move_to_end(cache_key)
+    return model
+
+
+def update_pair_inference(
+    loaded_checkpoint: str | None,
+    view_state: HistogramViewState | None,
+    left_image: str | None,
+    right_image: str | None,
+) -> tuple[float | None, Figure | None, str]:
+    """Calculate the selected pair and redraw its marker on the histogram."""
+    if view_state is None:
+        return None, None, "Choose a checkpoint to compare two images."
+
+    base_histogram = create_distance_histogram(
+        view_state.histogram_data,
+        view_state.title,
+    )
+    if loaded_checkpoint is None or (
+        str(Path(loaded_checkpoint).resolve()) != view_state.checkpoint_path
+    ):
+        return None, base_histogram, "The loaded model does not match this histogram."
+    if left_image is None or right_image is None:
+        return None, base_histogram, "Choose both a left and a right image."
+
+    try:
+        with MODEL_LOCK:
+            model = get_model_for_histogram_view(view_state)
+            distance = calculate_pair_distance(
+                model,
+                Path(left_image),
+                Path(right_image),
+            )
+        marked_histogram = create_distance_histogram(
+            view_state.histogram_data,
+            view_state.title,
+            selected_pair_distance=distance,
+        )
+        return distance, marked_histogram, "Selected pair highlighted in purple."
+    except (OSError, ValueError) as error:
+        LOGGER.warning("Pair inference was skipped: %s", error)
+        return None, base_histogram, f"Pair inference failed: `{error}`"
+    except Exception as error:  # Keep image browsing usable after model errors.
+        LOGGER.exception("Could not calculate selected-pair distance")
+        return None, base_histogram, f"Pair inference failed: `{error}`"
 
 
 def update_backbone_selection(
     backbone: str | None,
-) -> tuple[gr.Dropdown, gr.Dropdown, None, None, str, None]:
+) -> tuple[gr.Dropdown, gr.Dropdown, None, None, None, str, None, str]:
     """Update all downstream model controls after a backbone change."""
     clear_model_cache()
     distance_functions = (
@@ -391,15 +460,17 @@ def update_backbone_selection(
         gr.Dropdown(choices=checkpoints, value=None, interactive=bool(checkpoints)),
         None,
         None,
+        None,
         "Choose a checkpoint to load the model and calculate its histogram.",
         None,
+        "Choose a checkpoint to compare two images.",
     )
 
 
 def update_distance_selection(
     backbone: str | None,
     distance_function: str | None,
-) -> tuple[gr.Dropdown, None, None, str, None]:
+) -> tuple[gr.Dropdown, None, None, None, str, None, str]:
     """Update checkpoints and clear the loaded model after distance changes."""
     clear_model_cache()
     checkpoints = checkpoint_dropdown_choices(
@@ -411,8 +482,10 @@ def update_distance_selection(
         gr.Dropdown(choices=checkpoints, value=None, interactive=bool(checkpoints)),
         None,
         None,
+        None,
         "Choose a checkpoint to load the model and calculate its histogram.",
         None,
+        "Choose a checkpoint to compare two images.",
     )
 
 
@@ -420,17 +493,45 @@ def load_checkpoint_and_histogram(
     checkpoint_value: str | None,
     backbone: str | None,
     distance_function: str | None,
-) -> tuple[str | None, Figure | None, str, None]:
+) -> tuple[
+    str | None,
+    HistogramViewState | None,
+    Figure | None,
+    str,
+    None,
+    str,
+]:
     """Load the chosen model and calculate its full distance histogram."""
     if checkpoint_value is None:
         clear_model_cache()
-        return None, None, "Choose a checkpoint to load the model.", None
+        return (
+            None,
+            None,
+            None,
+            "Choose a checkpoint to load the model.",
+            None,
+            "Choose a checkpoint to compare two images.",
+        )
 
     clear_model_cache()
     if CHECKPOINT_ROOT is None or DATASET_ROOT is None:
-        return None, None, "Dataset or checkpoint configuration is invalid.", None
+        return (
+            None,
+            None,
+            None,
+            "Dataset or checkpoint configuration is invalid.",
+            None,
+            "Pair inference is unavailable.",
+        )
     if backbone is None or distance_function is None:
-        return None, None, "Select a backbone and distance function first.", None
+        return (
+            None,
+            None,
+            None,
+            "Select a backbone and distance function first.",
+            None,
+            "Pair inference is unavailable.",
+        )
 
     checkpoint_path = Path(checkpoint_value).resolve()
     valid_checkpoints = discover_checkpoints(
@@ -439,7 +540,14 @@ def load_checkpoint_and_histogram(
         distance_function,
     )
     if checkpoint_path not in valid_checkpoints:
-        return None, None, "The selected checkpoint is not valid.", None
+        return (
+            None,
+            None,
+            None,
+            "The selected checkpoint is not valid.",
+            None,
+            "Pair inference is unavailable.",
+        )
 
     try:
         with MODEL_LOCK:
@@ -449,10 +557,8 @@ def load_checkpoint_and_histogram(
                 distance_function,
             )
             model_name = checkpoint_path.stem.removeprefix("checkpoint_")
-            title = (
-                f"{backbone} + {distance_function}\n"
-                f"{model_name}"
-            )
+            checkpoint_last_change_time = get_model_last_change_time(checkpoint_path)
+            title = f"{backbone} + {distance_function}\n{model_name}"
             if HISTOGRAM_CACHE_ROOT is None:
                 histogram_data = calculate_distance_histogram_data(
                     model,
@@ -464,7 +570,10 @@ def load_checkpoint_and_histogram(
                     backbone_model=backbone,
                     distance_function=distance_function,
                     model_name=model_name,
-                    last_change_time=get_model_last_change_time(checkpoint_path),
+                    last_change_time=checkpoint_last_change_time,
+                )
+                assert DATASET_ROOT is not None, (
+                    "DATASET_ROOT must be configured to calculate histograms."
                 )
                 histogram_data, cache_outcome = get_or_create_histogram_data(
                     HISTOGRAM_CACHE_ROOT,
@@ -475,6 +584,14 @@ def load_checkpoint_and_histogram(
                         DATASET_ROOT,
                     ),
                 )
+            view_state = HistogramViewState(
+                checkpoint_path=str(checkpoint_path),
+                checkpoint_last_change_time=checkpoint_last_change_time,
+                backbone_model=backbone,
+                distance_function=distance_function,
+                title=title,
+                histogram_data=histogram_data,
+            )
             histogram = create_distance_histogram(histogram_data, title)
 
             MODEL_CACHE.clear()
@@ -488,15 +605,29 @@ def load_checkpoint_and_histogram(
         if cache_outcome == "uncached" and HISTOGRAM_CACHE_ROOT is None:
             cache_status = f"{cache_status} {HISTOGRAM_CACHE_STATUS}"
         status = (
-            f"Model loaded on `{get_model_device()}`: "
+            f"Model loaded on `{GUI_SETTINGS.resolved_model_device}`: "
             f"**{format_checkpoint_label(checkpoint_path)}**  \n"
             f"{cache_status}"
         )
-        return str(checkpoint_path), histogram, status, None
+        return (
+            str(checkpoint_path),
+            view_state,
+            histogram,
+            status,
+            None,
+            "Ready to compare the selected images.",
+        )
     except Exception as error:  # Gradio must remain usable after a failed load.
         LOGGER.exception("Could not load checkpoint %s", checkpoint_path)
         MODEL_CACHE.clear()
-        return None, None, f"Model loading failed: `{error}`", None
+        return (
+            None,
+            None,
+            None,
+            f"Model loading failed: `{error}`",
+            None,
+            "Pair inference is unavailable.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -546,38 +677,47 @@ def to_gallery_items(image_paths: list[Path]) -> list[tuple[str, str]]:
 
 def update_image_gallery(
     class_name: str | None,
-) -> tuple[list[tuple[str, str]], list[str], str | None]:
+) -> tuple[
+    list[tuple[str, str]],
+    list[str],
+    str | None,
+    str | None,
+]:
     """Update one gallery and select its first image after a class change."""
     if DATASET_ROOT is None or class_name is None:
-        return [], [], None
+        return [], [], None, None
 
     image_paths = list_class_images(DATASET_ROOT, class_name)
     serialized_paths = [str(image_path) for image_path in image_paths]
     selected_image = serialized_paths[0] if serialized_paths else None
-    return to_gallery_items(image_paths), serialized_paths, selected_image
+    return (
+        to_gallery_items(image_paths),
+        serialized_paths,
+        selected_image,
+        selected_image,
+    )
 
 
 def select_gallery_image(
     image_paths: list[str],
     event: gr.SelectData,
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """Return the path selected from a Gradio thumbnail gallery."""
     if not image_paths or event.index is None:
-        return None
+        return None, None
 
     raw_index = (
-        event.index[0]
-        if isinstance(event.index, (tuple, list))
-        else event.index
+        event.index[0] if isinstance(event.index, (tuple, list)) else event.index
     )
     selected_index = int(raw_index)
     if selected_index < 0 or selected_index >= len(image_paths):
-        return None
-    return image_paths[selected_index]
+        return None, None
+    selected_path = image_paths[selected_index]
+    return selected_path, selected_path
 
 
-def build_image_panel(side: str, class_names: list[str]) -> None:
-    """Render and connect one dataset image-selection panel."""
+def build_image_panel(side: str, class_names: list[str]) -> gr.State:
+    """Render one image panel and return its selected-filepath state."""
     initial_class = class_names[0] if class_names else None
     initial_paths = (
         list_class_images(DATASET_ROOT, initial_class)
@@ -603,6 +743,9 @@ def build_image_panel(side: str, class_names: list[str]) -> None:
         allow_preview=False,
     )
     image_path_state = gr.State(value=serialized_paths)
+    selected_image_path_state = gr.State(
+        value=serialized_paths[0] if serialized_paths else None
+    )
     selected_image = gr.Image(
         value=serialized_paths[0] if serialized_paths else None,
         label="Selected image",
@@ -613,13 +756,19 @@ def build_image_panel(side: str, class_names: list[str]) -> None:
     class_dropdown.change(
         fn=update_image_gallery,
         inputs=class_dropdown,
-        outputs=[gallery, image_path_state, selected_image],
+        outputs=[
+            gallery,
+            image_path_state,
+            selected_image,
+            selected_image_path_state,
+        ],
     )
     gallery.select(
         fn=select_gallery_image,
         inputs=image_path_state,
-        outputs=selected_image,
+        outputs=[selected_image, selected_image_path_state],
     )
+    return selected_image_path_state
 
 
 # ---------------------------------------------------------------------------
@@ -651,15 +800,27 @@ CUSTOM_CSS = """
 """
 
 
-DATASET_ROOT, DATASET_STATUS = get_configured_directory(
+DATASET_DIRECTORY_STATUS = get_existing_directory_status(
+    GUI_SETTINGS.dataset_root,
     "DATASET_ROOT",
     "Dataset",
 )
-CHECKPOINT_ROOT, CHECKPOINT_STATUS = get_configured_directory(
+DATASET_ROOT = DATASET_DIRECTORY_STATUS.path
+DATASET_STATUS = DATASET_DIRECTORY_STATUS.message
+
+CHECKPOINT_DIRECTORY_STATUS = get_existing_directory_status(
+    GUI_SETTINGS.checkpoint_root,
     "CHECKPOINT_ROOT",
     "Checkpoints",
 )
-HISTOGRAM_CACHE_ROOT, HISTOGRAM_CACHE_STATUS = get_histogram_cache_directory()
+CHECKPOINT_ROOT = CHECKPOINT_DIRECTORY_STATUS.path
+CHECKPOINT_STATUS = CHECKPOINT_DIRECTORY_STATUS.message
+
+HISTOGRAM_CACHE_DIRECTORY_STATUS = get_cache_directory_status(
+    GUI_SETTINGS.histogram_cache_root,
+)
+HISTOGRAM_CACHE_ROOT = HISTOGRAM_CACHE_DIRECTORY_STATUS.path
+HISTOGRAM_CACHE_STATUS = HISTOGRAM_CACHE_DIRECTORY_STATUS.message
 
 DATASET_CLASSES = list_dataset_classes(DATASET_ROOT) if DATASET_ROOT else []
 BACKBONES = discover_backbones(CHECKPOINT_ROOT) if CHECKPOINT_ROOT else []
@@ -694,6 +855,7 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
     )
 
     loaded_checkpoint_state = gr.State(value=None)
+    histogram_view_state = gr.State(value=None)
 
     with gr.Group(elem_classes="main-panel"):
         gr.Markdown("### Model selection")
@@ -719,7 +881,10 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=3, min_width=320, elem_classes="main-panel"):
-            build_image_panel("Left", DATASET_CLASSES)
+            left_selected_image_state = build_image_panel(
+                "Left",
+                DATASET_CLASSES,
+            )
 
         with gr.Column(scale=4, min_width=420, elem_classes="main-panel"):
             gr.Markdown("### Pair distance")
@@ -729,13 +894,17 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
                 precision=4,
                 interactive=False,
             )
+            pair_status = gr.Markdown("Choose a checkpoint to compare two images.")
             model_status = gr.Markdown(
                 "Choose a checkpoint to load the model and calculate its histogram."
             )
             histogram_plot = gr.Plot(value=None, label="Distance distribution")
 
         with gr.Column(scale=3, min_width=320, elem_classes="main-panel"):
-            build_image_panel("Right", DATASET_CLASSES)
+            right_selected_image_state = build_image_panel(
+                "Right",
+                DATASET_CLASSES,
+            )
 
     backbone_dropdown.change(
         fn=update_backbone_selection,
@@ -744,10 +913,14 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
             distance_dropdown,
             checkpoint_dropdown,
             loaded_checkpoint_state,
+            histogram_view_state,
             histogram_plot,
             model_status,
             pair_distance,
+            pair_status,
         ],
+        concurrency_limit=1,
+        concurrency_id="model-inference",
     )
     distance_dropdown.change(
         fn=update_distance_selection,
@@ -755,10 +928,14 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
         outputs=[
             checkpoint_dropdown,
             loaded_checkpoint_state,
+            histogram_view_state,
             histogram_plot,
             model_status,
             pair_distance,
+            pair_status,
         ],
+        concurrency_limit=1,
+        concurrency_id="model-inference",
     )
     checkpoint_dropdown.change(
         fn=load_checkpoint_and_histogram,
@@ -769,15 +946,42 @@ with gr.Blocks(title="Rotation-Free Image Comparison") as demo:
         ],
         outputs=[
             loaded_checkpoint_state,
+            histogram_view_state,
             histogram_plot,
             model_status,
             pair_distance,
+            pair_status,
         ],
         show_progress="full",
+        concurrency_limit=1,
+        concurrency_id="model-inference",
+    )
+
+    pair_inference_inputs = [
+        loaded_checkpoint_state,
+        histogram_view_state,
+        left_selected_image_state,
+        right_selected_image_state,
+    ]
+    pair_inference_outputs = [pair_distance, histogram_plot, pair_status]
+    gr.on(
+        triggers=[
+            histogram_view_state.change,
+            left_selected_image_state.change,
+            right_selected_image_state.change,
+        ],
+        fn=update_pair_inference,
+        inputs=pair_inference_inputs,
+        outputs=pair_inference_outputs,
+        show_progress="hidden",
+        trigger_mode="always_last",
+        concurrency_limit=1,
+        concurrency_id="model-inference",
     )
 
 
-if __name__ == "__main__":
+def launch_gui() -> None:
+    """Launch the Gradio interface from another entrypoint."""
     logging.basicConfig(level=logging.INFO)
     allowed_paths = [str(DATASET_ROOT)] if DATASET_ROOT is not None else None
     demo.launch(
