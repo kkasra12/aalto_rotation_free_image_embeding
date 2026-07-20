@@ -9,7 +9,7 @@ This module contains the dataset class for the image pairs dataset.
     A dataset class for the image pairs dataset.
     The dataset is created by providing the root directory of the dataset.
     The dataset will contain all possible pairs of images in the dataset.
-    The `__getitem__` method returns a tuple of two images and a label, where the label is 1 if the images are of the same class, 0 otherwise.
+    The `__getitem__` method returns a tuple of two images and a label, where the label is 0 if the images are of the same class, 1 otherwise.
 """
 
 from collections.abc import Callable

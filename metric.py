@@ -79,7 +79,7 @@ def calculate_full_distance_distribution(
         dataset (ImagePairsDataset): _dataset containing pairs of images and labels indicating whether they are from the same scene or not
         model (ImageEmbeding): _model to be evaluated
     Returns:
-        2-column numpy array: the first column contains the distances between image pairs, and the second column contains the corresponding labels (1 for same scene, 0 for different scenes)
+        2-column numpy array: the first column contains the distances between image pairs, and the second column contains the corresponding labels (0 for same scene, 1 for different scenes)
     """
     distances = []
     labels = []
@@ -112,7 +112,7 @@ def plot_distance_distribution(
 
     Args:
         data: 2-column array from calculate_full_distance_distribution —
-              col 0 = similarity scores, col 1 = binary labels (1=same scene, 0=different)
+              col 0 = similarity scores, col 1 = binary labels (0=same scene, 1=different)
         title: plot title
         kind: "histogram" or "violin"
         save_path: if provided, saves the figure to this path instead of displaying it
@@ -120,8 +120,8 @@ def plot_distance_distribution(
     scores = data[:, 0]
     labels = data[:, 1].astype(int)
 
-    same = scores[labels == 1]
-    diff = scores[labels == 0]
+    same = scores[labels == 0]
+    diff = scores[labels == 1]
 
     FONT_LABEL = 16
     FONT_TICK = 14

@@ -13,7 +13,7 @@ we can use cross-entropy loss with a softmax layer instead of the contrastive lo
 Accroding to "Dimensionality Reduction by Learning an Invariant Mapping" paper, eq 4, we can use (denoted as `linear` in this code):
 L(W, Y, X1, X2) = (1 - Y) * 1/2 D_W^2 + Y/2 {max(0, m - D_W )}^2
 
-where m > 0 is a margin, D_W is the distance between the embeddings of X1 and X2, and Y is the label (0 or 1). Y is 1 if the images are of the same class, 0 otherwise.
+where m > 0 is a margin, D_W is the distance between the embeddings of X1 and X2, and Y is the label (0 or 1). Y is 0 if the images are of the same class, 1 otherwise.
 """
 
 import os
